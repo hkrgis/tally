@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowRight, ArrowUpRight, CalendarDays, Camera, ChevronDown, ChevronRight, Download, ListFilter, Pencil, Plus, Search } from 'lucide-react'
+import { ArrowRight, ArrowUpRight, CalendarDays, Camera, ChevronDown, ChevronRight, Download, ListFilter, Pencil, Plus, ReceiptText, Search } from 'lucide-react'
 import { categories, type Activity, type Expense, type Member, type Payment } from './model'
 import { decimal, expenseCharges, memberBalance, money, splitExpense, type PairBalance } from './money'
 import { download, toCsv } from './storage'
-import { CategoryIcon, Empty, Explanation, formatDay, formatEventTime, OwedIcon, OwesIcon, PaymentIcon } from './ui'
+import { CategoryIcon, Empty, Explanation, formatDay, formatEventTime, memberInitials, OwedIcon, OwesIcon, PaymentIcon } from './ui'
 
 export const methodLabels = { equal: 'Equal', percentage: 'Percentage', exact: 'Exact amounts', weighted: 'Weighted shares' }
 type Common = { currency: string; nameOf: (id: string) => string }
@@ -17,22 +17,44 @@ const transactions = (expenses: Expense[], payments: Payment[]): Transaction[] =
   ...payments.map(data => ({ type: 'payment' as const, data })),
 ].sort((left, right) => right.data.date.localeCompare(left.data.date) || left.data.id.localeCompare(right.data.id))
 
-function ExpenseBreakdown({ expense, currency, nameOf }: Common & { expense: Expense }) {
+function ExpenseBreakdown({ expense, shares, currency, nameOf }: Common & { expense: Expense; shares: ReturnType<typeof splitExpense> }) {
   const charges = expenseCharges(expense)
+  const method = expense.split.method
+  const splitLabel = method === 'equal' || method === 'percentage' ? methodLabels[method] : `Custom · ${methodLabels[method]}`
   return <>
-    <div className="breakdown-grid">
-      <div><h4>Paid by{expense.paymentMethod && ` · ${expense.paymentMethod}`}</h4>{expense.payers.map(payer => <div className="line" key={payer.memberId}><span>{nameOf(payer.memberId)}</span><strong>{money(payer.amount, currency)}</strong></div>)}</div>
-      <div><h4>Split · {methodLabels[expense.split.method]}</h4>{splitExpense(expense).map((share, index) => {
-        const value = expense.split.participants[index].amount
-        const rule = expense.split.method === 'percentage' ? ` (${value / 100}%)` : expense.split.method === 'weighted' ? ` (${value} shares)` : ''
-        return <div className="line" key={share.memberId}><span>{nameOf(share.memberId)}{rule}</span><strong>{money(share.amount, currency)}</strong></div>
-      })}</div>
-      <div><h4>Original debts</h4>
-        {charges.length ? charges.map(charge => <div className="line" key={`${charge.from}:${charge.to}`}>
-          <span>{nameOf(charge.from)} <span aria-label="owes">→</span> {nameOf(charge.to)}</span><strong>{money(charge.amount, currency)}</strong>
-        </div>) : <p className="muted">Everyone covered their own share.</p>}
+    <section className="expense-section">
+      <div className="expense-section-heading">
+        <h4>Paid by</h4>
+        {expense.paymentMethod && <span>{expense.paymentMethod}</span>}
       </div>
-    </div>
+      <dl>{expense.payers.map(payer => <div className="expense-detail-row" key={payer.memberId}>
+        <dt>{nameOf(payer.memberId)}</dt><dd>{money(payer.amount, currency)}</dd>
+      </div>)}</dl>
+    </section>
+    <section className="expense-section expense-split">
+      <div className="expense-section-heading">
+        <h4>Split between {shares.length} {shares.length === 1 ? 'person' : 'people'}</h4>
+        <span>{splitLabel}</span>
+      </div>
+      <ul aria-label="Participants">{shares.map((share, index) => {
+        const name = nameOf(share.memberId)
+        const value = expense.split.participants[index].amount
+        const rule = method === 'percentage' ? `${value / 100}%` : method === 'weighted' ? `${value} ${value === 1 ? 'share' : 'shares'}` : ''
+        return <li className="expense-detail-row" key={share.memberId}>
+          <span className="expense-participant">
+            <span className="expense-initials" aria-hidden="true">{memberInitials(name)}</span>
+            <span>{name}{rule && <small>{rule}</small>}</span>
+          </span>
+          <strong>{money(share.amount, currency)}</strong>
+        </li>
+      })}</ul>
+    </section>
+    <section className="expense-section expense-debts">
+      <div className="expense-section-heading"><h4>Original debts</h4></div>
+      {charges.length ? <dl>{charges.map(charge => <div className="expense-detail-row" key={`${charge.from}:${charge.to}`}>
+        <dt>{nameOf(charge.from)} <span aria-label="owes">→</span> {nameOf(charge.to)}</dt><dd>{money(charge.amount, currency)}</dd>
+      </div>)}</dl> : <p className="muted">Everyone covered their own share.</p>}
+    </section>
     {expense.notes && <div><h4>Notes</h4><p className="record-note">{expense.notes}</p></div>}
     {Boolean(expense.photos?.length) && <div>
       <h4>Photos and receipts</h4>
@@ -73,25 +95,25 @@ export function TransactionRow({ item, currency, nameOf, canEdit, editExpense, e
     </details>
   }
   const expense = item.data
+  const shares = splitExpense(expense)
   const payers = expense.payers.map(payer => nameOf(payer.memberId)).join(', ')
-  const personalShare = memberId ? splitExpense(expense).find(share => share.memberId === memberId) : undefined
-  return <details className="transaction" ref={disclosure} open={initiallyOpen}>
+  const personalShare = shares.find(share => share.memberId === memberId)?.amount ?? 0
+  return <details className="transaction expense-card" ref={disclosure} open={initiallyOpen}>
     <summary>
-      <CategoryIcon category={expense.category} />
+      <span className="tile tone-blue" aria-hidden="true"><ReceiptText size={20} strokeWidth={1.7} /></span>
       <span className="transaction-text"><strong>{expense.description}</strong>
-        <small><span className="payer-line">{payers} paid</span><span className="middot">·</span>{expense.paymentMethod ??
-          `${expense.split.participants.length} ${expense.split.participants.length === 1 ? 'share' : 'shares'}`}
+        <small><span className="payer-line">{payers} paid</span><span className="middot">·</span>{methodLabels[expense.split.method]} split
           {Boolean(expense.photos?.length) && <span className="photo-counter" aria-label={`${expense.photos?.length} attached photos`}><Camera size={13} aria-hidden="true" />{expense.photos?.length}</span>}
         </small>
       </span>
       <span className="transaction-amount">{money(expense.amount, currency)}
-        {personalShare && <small>Your share {money(personalShare.amount, currency)}</small>}
+        {memberId && <small>Your share {money(personalShare, currency)}</small>}
       </span>
       <ChevronDown size={16} className="chevron" aria-hidden="true" />
     </summary>
-    <div className="breakdown">
-      <ExpenseBreakdown expense={expense} currency={currency} nameOf={nameOf} />
-      {canEdit && <button className="button button-small" onClick={() => editExpense(expense)}><Pencil size={15} />Edit expense</button>}
+    <div className="breakdown expense-breakdown">
+      <ExpenseBreakdown expense={expense} shares={shares} currency={currency} nameOf={nameOf} />
+      {canEdit && <button type="button" className="text-button expense-edit" onClick={() => editExpense(expense)}><Pencil size={16} />Edit expense</button>}
     </div>
   </details>
 }

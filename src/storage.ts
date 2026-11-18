@@ -14,8 +14,8 @@ export const dataUrl = new URL(`${import.meta.env.BASE_URL}app.json`, document.b
 export type Snapshot = { data: Directory; sha: string }
 
 export class StaleDataError extends Error {
-  constructor() {
-    super('The repository changed while you were editing. Reload the workspace and reapply your changes to the latest version.')
+  constructor(message = 'The repository changed while you were editing. Reload the workspace and reapply your changes to the latest version.') {
+    super(message)
   }
 }
 

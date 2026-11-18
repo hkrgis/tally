@@ -9,7 +9,7 @@ import { formatDay } from './ui'
 const monthLabel = new Intl.DateTimeFormat('en-AU', { month: 'long', year: 'numeric', timeZone: 'UTC' })
 const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
-export function ExpenseCalendar({ expenses, currency, add, ...ledger }: Omit<LedgerRows, 'payments'> & { add?: (date: string) => void }) {
+export function ExpenseCalendar({ expenses, currency, memberId, add, ...ledger }: Omit<LedgerRows, 'payments'> & { memberId: string; add?: (date: string) => void }) {
   const currentDay = today()
   const [selected, setSelected] = useState(currentDay)
   const month = selected.slice(0, 7)
@@ -58,7 +58,7 @@ export function ExpenseCalendar({ expenses, currency, add, ...ledger }: Omit<Led
       {add && <button className="text-button" onClick={() => add(selected)}><Plus size={16} />Add on this date</button>}
     </div>
     {selectedExpenses.length > 0 ? <div className="list-surface">
-      {selectedExpenses.map(expense => <TransactionRow key={expense.id} item={{ type: 'expense', data: expense }} currency={currency} {...ledger} />)}
+      {selectedExpenses.map(expense => <TransactionRow key={expense.id} item={{ type: 'expense', data: expense }} currency={currency} memberId={memberId} {...ledger} />)}
     </div> : <p className="calendar-empty muted">No expenses recorded for this day.</p>}
   </section>
 }

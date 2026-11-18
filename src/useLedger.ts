@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { accountError, isCloudGroup, saveCloudGroup, type Account, type CloudGroup } from './firebase'
 import { parseData, type Activity, type AppData, type Group } from './model'
 import { hasRepository, readPublished, readRepository, serialize, StaleDataError } from './storage'
 import { createGroupKey, openGroup, sameDirectory, sameEntry, sealGroup, type Directory, type GroupEntry } from './vault'
 
 type EventInput = Omit<Activity, 'id' | 'at' | 'actor'>
 type Editor = { actor: string; data: Directory; sha: string | null }
-type Opened = Awaited<ReturnType<typeof openGroup>>
+type Opened = Awaited<ReturnType<typeof openGroup>> & { cloud?: CloudGroup }
 
 export const errorText = (error: unknown) => error instanceof Error ? error.message : 'Something went wrong. Try again.'
 
-export function useLedger() {
+export function useLedger(account: Account | null) {
   const workingLock = useRef(false)
   const refreshSequence = useRef(0)
   const [published, setPublished] = useState<Directory | null>(null)
@@ -23,7 +24,9 @@ export function useLedger() {
   const [working, setWorking] = useState(false)
   const [publication, setPublication] = useState<string | null>(null)
   const directory = editor?.data ?? published
-  const active = opened && sameEntry(directory?.groups.find(group => group.id === opened.entry.id), opened.entry) ? opened : null
+  const active = opened && (opened.cloud || sameEntry(directory?.groups.find(group => group.id === opened.entry.id), opened.entry)) ? opened : null
+  const cloudOpen = Boolean(active?.cloud)
+  const cloudOwner = Boolean(active?.cloud && account?.verified && account.id === active.cloud.owner)
 
   const refresh = useCallback(async (revision?: string) => {
     const sequence = ++refreshSequence.current
@@ -76,14 +79,14 @@ export function useLedger() {
     void refresh()
   }
 
-  async function unlock(entry: GroupEntry, password: string) {
+  async function unlock(entry: GroupEntry, password: string, cloud?: CloudGroup) {
     const record = await openGroup(entry, password)
-    if (editor && 'name' in entry) {
+    if (!cloud && editor && 'name' in entry) {
       // Older envelopes needed the public name to authenticate decryption.
       await storeDraft(editor, record.data, record)
     } else {
-      setOpened(record)
-      if (editor) setNames(current => ({ ...current, [entry.id]: record.data.groups[0].name }))
+      setOpened({ ...record, cloud })
+      if (!cloud && editor) setNames(current => ({ ...current, [entry.id]: record.data.groups[0].name }))
     }
   }
 
@@ -99,8 +102,7 @@ export function useLedger() {
   }
 
   async function storeDraft(current: Editor, draft: AppData, protection: Pick<Opened, 'key' | 'salt'>, info?: EventInput) {
-    if (info) draft.activity.push({ ...info, id: crypto.randomUUID(), at: new Date().toISOString(), actor: current.actor })
-    const data = parseData(draft)
+    const data = withActivity(draft, current.actor, info)
     const entry = await sealGroup(data, protection)
     const groups = current.data.groups.some(group => group.id === entry.id)
       ? current.data.groups.map(group => group.id === entry.id ? entry : group)
@@ -111,22 +113,46 @@ export function useLedger() {
     setDirty(true)
   }
 
+  function withActivity(draft: AppData, actor: string, info?: EventInput) {
+    if (info) draft.activity.push({ ...info, id: crypto.randomUUID(), at: new Date().toISOString(), actor })
+    return parseData(draft)
+  }
+
+  async function storeCloud(current: Account, draft: AppData, protection: Pick<Opened, 'key' | 'salt'>,
+    info: EventInput, expectedRevision?: string) {
+    const data = withActivity(draft, 'Group owner', info)
+    const entry = await sealGroup(data, protection)
+    try {
+      const cloud = await saveCloudGroup(current, data.groups[0].name, entry, expectedRevision)
+      setOpened({ ...protection, data, entry, cloud })
+    } catch (issue) {
+      throw new Error(accountError(issue))
+    }
+  }
+
   async function createGroup(group: Group, password: string) {
-    if (!editor) throw new Error('Open the workspace before creating a group.')
+    const cloud = isCloudGroup(group.id)
+    if (cloud && !account?.verified) throw new Error('Verify your email before creating groups.')
+    if (!cloud && !editor) throw new Error('Open the workspace before creating a group.')
     await exclusive(async () => {
       const data: AppData = { version: 1, groups: [group], members: [], expenses: [], payments: [], sessions: [], activity: [] }
       const protection = await createGroupKey(password)
-      await storeDraft(editor, data, protection, { entity: 'group', groupId: group.id, entityId: group.id, title: group.name, action: 'created' })
+      const info: EventInput = { entity: 'group', groupId: group.id, entityId: group.id, title: group.name, action: 'created' }
+      if (cloud && account) await storeCloud(account, data, protection, info)
+      else if (editor) await storeDraft(editor, data, protection, info)
     })
   }
 
   async function change(update: (draft: AppData) => void, info: EventInput, password?: string) {
-    if (!editor || !active || info.groupId !== active.entry.id) throw new Error('Unlock the group in the workspace before changing records.')
+    if (!active || info.groupId !== active.entry.id || (active.cloud ? !cloudOwner : !editor)) {
+      throw new Error('Open a group you can edit before changing records.')
+    }
     await exclusive(async () => {
       const draft = structuredClone(active.data)
       update(draft)
       const protection = password ? await createGroupKey(password) : { key: active.key, salt: active.salt }
-      await storeDraft(editor, draft, protection, info)
+      if (active.cloud && account) await storeCloud(account, draft, protection, info, active.cloud.revision)
+      else if (editor) await storeDraft(editor, draft, protection, info)
     })
   }
 
@@ -167,6 +193,6 @@ export function useLedger() {
   return {
     data: active?.data ?? null, directory, names, loading, loadError, offline, refresh,
     editor, dirty, working, publication, beginEditing, closeEditor, change, prepareSave, confirmSaved, reloadRepository,
-    unlock, lock, createGroup,
+    unlock, lock, createGroup, cloudOpen, cloudOwner,
   }
 }

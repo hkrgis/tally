@@ -29,6 +29,16 @@ If the **Check GitHub Pages configuration** step returns 404, open the repositor
 
 Open the invite link shared by the organiser, or select **Open an invite** and paste the link or code. Enter the group password to see expenses, reimbursements and balances. **Lock** or a reload closes the unlocked view. **Calendar** shows monthly totals and daily expenses. Open an expense to see its notes and photos.
 
+## Account groups and recovery
+
+With Firebase configured, select **Sign in → Create account**, then verify your email. You can reopen your groups from **Account**. Group edits save to Firestore under the verified owner's account. Viewers can still open an invite and unlock the encrypted records with the shared group password.
+
+Choose **Forgot password?** to send a reset link to your account email. Firebase project admins can also send a reset from the Authentication users page. To show **Account recovery** in Tally, add the Firestore document `accountAdmins/<Firebase Auth user UID>` with `enabled` set to boolean `true` as a Firebase project admin.
+
+For deployment, enable **Email/Password** in Firebase Authentication, add the deployed host under **Authorised domains**, and create a Firestore database in Native mode. From this checkout, run `firebase deploy --only firestore:rules,firestore:indexes --project <project-id>`. Set the four public Firebase web values from [.env.example](.env.example) as GitHub Actions repository variables and run the Pages workflow. For local development, use `.env.local`.
+
+To test the access rules, run `firebase emulators:start --project demo-tally --only auth,firestore` and then `npm run test:firebase`. Set `VITE_FIREBASE_EMULATORS=true` for a local dev server with the emulators.
+
 ## Work on and publish changes
 
 Select **Workspace → Open workspace** to edit a local copy. A group password opens an existing group. GitHub repository permissions control who can publish. **Log out** locks the group and closes the workspace.
@@ -48,4 +58,4 @@ The ledger allocates fractional units by largest remainder with stable member ID
 
 Tally uses Web Crypto with PBKDF2-SHA-256 and AES-256-GCM. New encrypted snapshots keep group names and archive status inside ciphertext. Open and save an older group in the workspace to upgrade its snapshot. Previous Git revisions retain the original metadata and can still be unlocked with the password that protected them. Tally cannot recover a lost password.
 
-GitHub Pages alone cannot provide Google/Gmail signup, password-reset emails or individual private member accounts. The app's member selector changes the balance perspective.
+Firebase handles account authentication and reset emails. A group password unlocks the group ciphertext and stays separate from account recovery. The app's member selector changes the balance perspective.

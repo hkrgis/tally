@@ -1,0 +1,62 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function verified() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function groupId(id) {
+      return id.matches('^f-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$');
+    }
+
+    function groupPath(id) {
+      return /databases/$(database)/documents/cloudGroups/$(id);
+    }
+
+    function validHead(data) {
+      return data.keys().hasAll(['owner', 'revision', 'partCount'])
+        && data.keys().hasOnly(['owner', 'revision', 'partCount'])
+        && data.owner == request.auth.uid
+        && data.revision is string && data.revision.size() == 36
+        && data.partCount is int && data.partCount >= 1 && data.partCount <= 12;
+    }
+
+    match /accountAdmins/{uid} {
+      allow get: if verified() && request.auth.uid == uid;
+    }
+
+    match /accounts/{uid}/groups/{id} {
+      allow read: if verified() && request.auth.uid == uid;
+      allow create, update: if verified() && request.auth.uid == uid && groupId(id)
+        && getAfter(groupPath(id)).data.owner == uid
+        && request.resource.data.keys().hasOnly(['name'])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 1 && request.resource.data.name.size() <= 100;
+    }
+
+    match /cloudGroups/{id} {
+      // An invite can retrieve ciphertext by its random ID. Group names are in the private index.
+      allow get: if groupId(id);
+      allow create: if verified() && groupId(id) && validHead(request.resource.data);
+      allow update: if verified() && resource.data.owner == request.auth.uid
+        && validHead(request.resource.data) && request.resource.data.revision != resource.data.revision;
+
+      match /parts/{partId} {
+        allow get: if groupId(id)
+          && resource.data.revision == get(groupPath(id)).data.revision
+          && resource.data.part < get(groupPath(id)).data.partCount;
+        allow create, update: if verified() && groupId(id) && partId.matches('^(0|[1-9]|1[01])$')
+          && getAfter(groupPath(id)).data.owner == request.auth.uid
+          && request.resource.data.keys().hasAll(['part', 'revision', 'payload'])
+          && request.resource.data.keys().hasOnly(['part', 'revision', 'payload'])
+          && request.resource.data.revision == getAfter(groupPath(id)).data.revision
+          && request.resource.data.part is int && request.resource.data.part >= 0
+          && request.resource.data.part < getAfter(groupPath(id)).data.partCount
+          && request.resource.data.payload is string
+          && request.resource.data.payload.size() >= 1 && request.resource.data.payload.size() <= 500000;
+        allow delete: if verified() && getAfter(groupPath(id)).data.owner == request.auth.uid
+          && resource.data.part >= getAfter(groupPath(id)).data.partCount;
+      }
+    }
+  }
+}
