@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useState } from 'react'
 import { ChevronLeft, ChevronRight, Plus } from 'lucide-react'
 import { monthCells, offsetMonth } from './calendar'
 import { today, type Expense } from './model'
@@ -9,8 +9,8 @@ import { formatDay } from './ui'
 const monthLabel = new Intl.DateTimeFormat('en-AU', { month: 'long', year: 'numeric', timeZone: 'UTC' })
 const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
-export function ExpenseCalendar({ expenses, currency, memberId, memberSelect, add, ...ledger }: Omit<LedgerRows, 'payments'> & {
-  memberId: string; memberSelect: ReactNode; add?: (date: string) => void;
+export function ExpenseCalendar({ expenses, currency, memberId, add, ...ledger }: Omit<LedgerRows, 'payments'> & {
+  memberId: string; add?: (date: string) => void;
 }) {
   const currentDay = today()
   const [selected, setSelected] = useState(currentDay)
@@ -33,10 +33,7 @@ export function ExpenseCalendar({ expenses, currency, memberId, memberSelect, ad
   return <section aria-labelledby="calendar-heading">
     <header className="section-heading page-section-heading">
       <h2 id="calendar-heading">Calendar</h2>
-      <div className="inline-actions">
-        {memberSelect}
-        <button className="text-button" onClick={() => setSelected(currentDay)}>Today</button>
-      </div>
+      <button className="text-button" onClick={() => setSelected(currentDay)}>Today</button>
     </header>
     <section className="calendar-surface" aria-label="Monthly expense calendar">
       <div className="calendar-toolbar">

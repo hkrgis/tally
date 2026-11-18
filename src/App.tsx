@@ -3,13 +3,13 @@ import { ArrowLeftRight, ArrowRight, CalendarDays, CircleAlert, CircleCheck, His
 import { AccountPanel, useAccount } from './Accounts'
 import { ExpenseCalendar } from './ExpenseCalendar'
 import { accountError, cloudGroupId, firebaseConfigured, isCloudGroup, readCloudGroup, signOutAccount, type CloudGroup } from './firebase'
-import { ExpenseForm, groupCurrencyLocked, GroupForm, MemberForm, PaymentForm, SessionForm, SessionsList } from './forms'
-import { registerPaymentMethod, type Expense, type Group, type Member, type Payment, type SportsSession } from './model'
+import { ExpenseForm, groupCurrencyLocked, GroupForm, MemberForm, PaymentForm } from './forms'
+import { registerPaymentMethod, type Expense, type Group, type Member, type Payment } from './model'
 import { calculateBalances, type PairBalance } from './money'
 import { accountMemberId, firstName, memberLabels } from './people'
 import { ActivityFeed, Balances, Expenses, Overview } from './screens'
 import { CopyField, SaveChanges, Settings, Workspace, useSettingsRequest, type Theme } from './Settings'
-import { Avatar, MemberRoster, MemberSelect, Sheet } from './ui'
+import { Avatar, MemberRoster, Sheet } from './ui'
 import { useLedger } from './useLedger'
 import { inviteCode, maxPasswordLength, type GroupEntry } from './vault'
 
@@ -24,13 +24,12 @@ const views = [
 type View = typeof views[number]['id']
 type MemberPage = { kind: 'members' } | { kind: 'member'; member?: Member; self?: boolean }
 type Panel =
-  | { kind: 'settings' | 'admin' | 'account' | 'sessions' | 'invite' | 'share' | 'save' | 'logout' }
+  | { kind: 'settings' | 'admin' | 'account' | 'invite' | 'share' | 'save' | 'logout' }
   | { kind: 'unlock'; entry: GroupEntry; cloud?: CloudGroup }
   | { kind: 'group'; group?: Group; newAccountGroupId?: string }
   | MemberPage
-  | { kind: 'expense'; expense?: Expense; session?: SportsSession; date?: string; roster?: MemberPage }
+  | { kind: 'expense'; expense?: Expense; date?: string; roster?: MemberPage }
   | { kind: 'payment'; payment?: Payment; pair?: PairBalance }
-  | { kind: 'session'; session?: SportsSession }
 
 function readPref(name: string) {
   try { return localStorage.getItem(`tally:${name}`) ?? '' } catch { return '' }
@@ -83,7 +82,6 @@ export default function App() {
   const [linkedInvite, setLinkedInvite] = useState(() => inviteCode(new URLSearchParams(window.location.search).get('group') ?? ''))
   const [focusTransaction, setFocusTransaction] = useState<string>()
   const [saveContents, setSaveContents] = useState<string | null>(null)
-  const [identity, setIdentity] = useState<{ scope: string; member: string }>()
   const [panel, setPanel] = useState<Panel | null>(null)
   const expenseMembersButton = useRef<HTMLButtonElement>(null)
   const [theme, setTheme] = useState<Theme>(() => {
@@ -94,21 +92,16 @@ export default function App() {
   const group = data?.groups[0]
   const members = data?.members ?? []
   const activeMembers = members.filter(member => member.active)
-  const scope = group ? `member:${account?.id ?? 'guest'}:${group.id}` : ''
-  const ownMember = (ledger.cloudOwner && group?.ownerMemberId) || (account && accountMemberId(members, account.name)) || ''
-  const chosen = identity?.scope === scope ? identity.member : account && scope ? readPref(scope) : ''
-  const memberId = members.find(member => member.id === chosen)?.id ??
-    (account ? ownMember : accountState.loading ? '' : activeMembers[0]?.id ?? members[0]?.id ?? '')
+  const memberId = (ledger.cloudOwner && group?.ownerMemberId) || (account && accountMemberId(members, account.name)) || ''
   const expenses = data?.expenses ?? []
   const payments = data?.payments ?? []
-  const sessions = data?.sessions ?? []
   const pairs = calculateBalances(expenses, payments)
   const labels = memberLabels(members)
   const nameOf = (id: string) => labels.get(id) ?? 'Unknown member'
   const fullNameOf = (id: string) => members.find(member => member.id === id)?.name ?? nameOf(id)
   const localWorkspace = ledger.cloudOpen ? ledger.cloudOwner : Boolean(ledger.editor)
   const canEdit = Boolean(localWorkspace && group && !group.archived)
-  const canAddSelf = Boolean(account?.verified && canEdit && !ownMember)
+  const canAddSelf = Boolean(ledger.cloudOwner && canEdit && !memberId)
   const hasSession = Boolean(ledger.editor || account)
   const busy = request.busy || ledger.working
 
@@ -147,13 +140,8 @@ export default function App() {
     request.clearError()
     setPanel(next)
   }
-  function selectMember(member: string) {
-    setIdentity({ scope, member })
-    if (account && scope) writePref(scope, member)
-  }
   function exitGroup(clearInvite = false) {
     ledger.lock()
-    setIdentity(undefined)
     setFocusTransaction(undefined)
     if (clearInvite) setLinkedInvite('')
     window.history.replaceState(null, '', window.location.pathname + (clearInvite ? '' : window.location.search))
@@ -227,7 +215,6 @@ export default function App() {
       groupId: record.groupId, entityId: record.id, entity: 'member', title: record.name,
       action: !original ? 'created' : record.active === original.active ? 'updated' : record.active ? 'restored' : 'archived',
     })
-    if (self) selectMember(record.id)
   }
   async function saveExpense(record: Expense, original?: Expense) {
     await ledger.change(draft => upsert(draft.expenses, {
@@ -258,14 +245,6 @@ export default function App() {
     })
     changed()
   }
-  async function saveSession(record: SportsSession, original?: SportsSession) {
-    await ledger.change(draft => upsert(draft.sessions, record), {
-      groupId: record.groupId, entityId: record.id, entity: 'session', title: record.name,
-      action: !original ? 'created' : record.active === original.active ? 'updated' : record.active ? 'restored' : 'archived',
-    })
-    changed({ kind: 'sessions' })
-  }
-
   const editExpense = (expense: Expense) => open({ kind: 'expense', expense })
   const editPayment = (payment: Payment) => open({ kind: 'payment', payment })
   const close = () => open(null)
@@ -336,7 +315,6 @@ export default function App() {
         {requestError}
         <UnlockForm busy={busy} unlock={password => request.run(async () => {
           await ledger.unlock(entry, password, panel.cloud)
-          setIdentity(undefined)
           setFocusTransaction(undefined)
           go('overview')
           close()
@@ -352,13 +330,6 @@ export default function App() {
       </Sheet>
     }
     if (!group) return null
-    if (panel.kind === 'sessions' && localWorkspace) return <Sheet key="sessions" title="Sports sessions" close={close} description="Confirm who attended before recording each court fee.">
-      <SessionsList sessions={sessions} expenses={expenses} currency={group.currency}
-        edit={canEdit ? session => open({ kind: 'session', session }) : undefined}
-        record={canEdit ? (session, date) => open({ kind: 'expense', session, date }) : undefined}
-        create={canEdit && activeMembers.length ? () => open({ kind: 'session' }) : undefined} />
-      {canEdit && activeMembers.length === 0 && <button className="button sheet-next" onClick={() => open({ kind: 'members' })}>Add group members</button>}
-    </Sheet>
     if (panel.kind === 'members' && localWorkspace) return <Sheet key="members" title="Group members" close={close}>
       {renderMemberPage(panel, open)}
     </Sheet>
@@ -368,18 +339,18 @@ export default function App() {
       {renderMemberPage(panel, open)}
     </Sheet>
     if (panel.kind === 'expense') {
-      const { expense, session, date, roster } = panel
+      const { expense, date, roster } = panel
       const title = roster?.kind === 'member' ? roster.member ? 'Edit member' : roster.self ? 'Add myself' : 'Add member'
-        : roster ? 'Group members' : expense ? 'Edit expense' : session ? 'Record sports session' : 'Add expense'
+        : roster ? 'Group members' : expense ? 'Edit expense' : 'Add expense'
       const backLabel = roster?.kind === 'member' ? 'Group members' : roster ? 'Back to expense' : undefined
       function navigateRoster(next?: MemberPage) {
-        open({ kind: 'expense', expense, session, date, roster: next })
+        open({ kind: 'expense', expense, date, roster: next })
         if (!next) window.requestAnimationFrame(() => expenseMembersButton.current?.focus())
       }
       return <Sheet key="expense" title={title} backLabel={backLabel} busy={busy}
         close={roster ? () => navigateRoster(roster.kind === 'member' ? { kind: 'members' } : undefined) : close}>
         <div hidden={Boolean(roster)}>
-          <ExpenseForm group={group} members={members} nameOf={nameOf} memberId={ownMember || memberId} expense={expense} session={session} occurrenceDate={date}
+          <ExpenseForm group={group} members={members} nameOf={nameOf} memberId={memberId} expense={expense} occurrenceDate={date}
             save={record => saveExpense(record, expense)} remove={expense ? () => removeExpense(expense) : undefined}
             manageMembers={() => navigateRoster({ kind: 'members' })} manageButton={expenseMembersButton} />
         </div>
@@ -393,15 +364,10 @@ export default function App() {
           save={record => savePayment(record, payment)} remove={payment ? () => removePayment(payment) : undefined} />
       </Sheet>
     }
-    if (panel.kind === 'session') return <Sheet key="session" title={panel.session ? 'Edit sports schedule' : 'New sports schedule'} close={close} busy={busy}>
-      <SessionForm group={group} members={members} nameOf={nameOf} session={panel.session} save={record => saveSession(record, panel.session)} />
-    </Sheet>
     return null
   }
 
   const screenProps = group && { currency: group.currency, nameOf, expenses, payments, canEdit, editExpense, editPayment }
-  const memberSelect = <MemberSelect members={members} nameOf={nameOf} value={memberId} ownMember={ownMember}
-    select={selectMember} addSelf={canAddSelf && !memberId ? () => open({ kind: 'member', self: true }) : undefined} />
   const allowedViews = localWorkspace ? views : views.filter(item => item.id !== 'activity')
   const activeView = !localWorkspace && view === 'activity' ? 'overview' : view
   const showStatus = group || ledger.editor || linkedInvite
@@ -468,12 +434,11 @@ export default function App() {
           {canEdit && <button className="button primary add-expense" onClick={() => startExpense()}><Plus size={20} />Add expense</button>}
         </section> : <header className="viewer-heading"><h1 id="group-title" tabIndex={-1}>Shared expenses</h1></header>}
         <div key={group.id} className="view">
-          {activeView === 'overview' && <Overview {...screenProps} pairs={pairs} memberId={memberId} memberSelect={memberSelect} events={data?.activity ?? []}
-            openExpenses={() => { setFocusTransaction(undefined); go('expenses') }} openTransaction={id => { setFocusTransaction(id); go('expenses') }}
-            openSessions={localWorkspace ? () => open({ kind: 'sessions' }) : undefined} />}
-          {activeView === 'expenses' && <Expenses key={focusTransaction} {...screenProps} memberId={memberId} memberSelect={memberSelect}
+          {activeView === 'overview' && <Overview {...screenProps} pairs={pairs} memberId={memberId} events={data?.activity ?? []}
+            openExpenses={() => { setFocusTransaction(undefined); go('expenses') }} openTransaction={id => { setFocusTransaction(id); go('expenses') }} />}
+          {activeView === 'expenses' && <Expenses key={focusTransaction} {...screenProps} memberId={memberId}
             fullNameOf={fullNameOf} canExport={localWorkspace} focusTransaction={focusTransaction} />}
-          {activeView === 'calendar' && <ExpenseCalendar {...screenProps} memberId={memberId} memberSelect={memberSelect} add={canEdit ? startExpense : undefined} />}
+          {activeView === 'calendar' && <ExpenseCalendar {...screenProps} memberId={memberId} add={canEdit ? startExpense : undefined} />}
           {activeView === 'balances' && <Balances {...screenProps} pairs={pairs} settle={pair => open({ kind: 'payment', pair })} />}
           {activeView === 'activity' && localWorkspace && <ActivityFeed events={data?.activity ?? []} />}
         </div>

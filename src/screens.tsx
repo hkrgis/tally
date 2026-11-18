@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ArrowRight, ArrowUpRight, CalendarDays, Camera, ChevronDown, ChevronRight, Download, ListFilter, Pencil, Plus, ReceiptText, Search } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { ArrowRight, ArrowUpRight, Camera, ChevronDown, ChevronRight, Download, ListFilter, Pencil, Plus, ReceiptText, Search } from 'lucide-react'
 import { categories, type Activity, type Expense, type Payment } from './model'
 import { decimal, expenseCharges, memberBalance, money, splitExpense, type PairBalance } from './money'
 import { download, toCsv } from './storage'
@@ -119,27 +119,24 @@ export function TransactionRow({ item, currency, nameOf, canEdit, editExpense, e
   </details>
 }
 
-export function Overview({ currency, pairs, memberId, memberSelect, openExpenses, openSessions, openTransaction, events, ...ledger }: Common & {
+export function Overview({ currency, pairs, memberId, openExpenses, openTransaction, events, ...ledger }: Common & {
   expenses: Expense[]; payments: Payment[]; events: Activity[];
-  pairs: PairBalance[]; memberId: string; memberSelect: ReactNode;
-  openExpenses: () => void; openSessions?: () => void; openTransaction: (id: string) => void;
+  pairs: PairBalance[]; memberId: string;
+  openExpenses: () => void; openTransaction: (id: string) => void;
 }) {
   const { owes, owed, net } = memberBalance(pairs, memberId)
   const created = new Map(events.filter(event => event.action === 'created').map(event => [`${event.entity}:${event.entityId}`, event.at]))
   const recent = transactions(ledger.expenses, ledger.payments).sort((a, b) => b.data.date.localeCompare(a.data.date) ||
     (created.get(`${b.type}:${b.data.id}`) ?? '').localeCompare(created.get(`${a.type}:${a.data.id}`) ?? '')).slice(0, 5)
   return <>
-    <section className="summary-panel" aria-labelledby="summary-title">
-      <div className="summary-heading">
-        <div className="summary-title"><h2 id="summary-title">Your balance</h2></div>
-        {memberSelect}
-      </div>
-      {memberId ? <dl className="metrics">
+    {memberId && <section className="summary-panel" aria-labelledby="summary-title">
+      <h2 id="summary-title" className="summary-title">Your balance</h2>
+      <dl className="metrics">
         <div><dt><OwesIcon />You owe</dt><dd>{money(owes, currency)}</dd></div>
         <div><dt><OwedIcon />Owed to you</dt><dd>{money(owed, currency)}</dd></div>
         <div><dt>Net balance</dt><dd className={net < 0 ? 'negative' : 'positive'}>{net > 0 ? '+' : ''}{money(net, currency)}</dd></div>
-      </dl> : <p className="muted choose-balance">Choose a member to see their balance.</p>}
-    </section>
+      </dl>
+    </section>}
     <section className="section-block" aria-labelledby="recent-title">
       <header className="section-heading"><h2 id="recent-title">Recent transactions</h2>
         <button className="text-button" onClick={openExpenses}>All expenses <ArrowRight size={16} /></button>
@@ -158,12 +155,11 @@ export function Overview({ currency, pairs, memberId, memberSelect, openExpenses
         </button></li>
       })}</ul> : <p className="muted compact-empty">No transactions yet.</p>}
     </section>
-    {openSessions && <button className="text-button session-shortcut" onClick={openSessions}><CalendarDays size={17} />Sports sessions <ArrowRight size={15} /></button>}
   </>
 }
 
-export function Expenses({ memberId, memberSelect, fullNameOf, canExport, focusTransaction, ...ledger }: LedgerRows & {
-  memberId: string; memberSelect: ReactNode; fullNameOf: Common['nameOf']; canExport: boolean; focusTransaction?: string;
+export function Expenses({ memberId, fullNameOf, canExport, focusTransaction, ...ledger }: LedgerRows & {
+  memberId: string; fullNameOf: Common['nameOf']; canExport: boolean; focusTransaction?: string;
 }) {
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('')
@@ -202,12 +198,9 @@ export function Expenses({ memberId, memberSelect, fullNameOf, canExport, focusT
   }
   return <section aria-labelledby="expenses-title">
     <header className="section-heading page-section-heading"><h2 id="expenses-title">Expenses</h2>
-      <div className="inline-actions">
-        {memberSelect}
-        {canExport && <button className="text-button expense-export" aria-label="Export CSV" title="Export CSV" onClick={exportCsv} disabled={!matched.length}>
-          <Download size={16} aria-hidden="true" /><span>Export CSV</span>
-        </button>}
-      </div>
+      {canExport && <button className="text-button" onClick={exportCsv} disabled={!matched.length}>
+        <Download size={16} aria-hidden="true" />Export CSV
+      </button>}
     </header>
     <div className="filters">
       <label className="search-field"><Search size={18} aria-hidden="true" /><input type="search" placeholder="Search transactions" aria-label="Search transactions" value={search} onChange={event => setSearch(event.target.value)} /></label>
@@ -277,7 +270,7 @@ export function Balances({ pairs, currency, nameOf, canEdit, settle, editPayment
 }
 
 export function ActivityFeed({ events }: { events: Activity[] }) {
-  const sorted = [...events].reverse().sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
+  const sorted = events.filter(event => event.entity !== 'session').reverse().sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
   return <section aria-labelledby="activity-title">
     <header className="section-heading page-section-heading"><h2 id="activity-title">Activity</h2></header>
     {sorted.length === 0 ? <Empty title="No activity yet">Changes to this group will appear here.</Empty> :

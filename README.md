@@ -48,7 +48,7 @@ From the home screen, select **Settings → Manage GitHub groups → Open worksp
 3. Select **Save changes**. Tally checks the file SHA before preparing the update. Copy the encrypted text, open the GitHub editor, replace the contents of `public/app.json`, and review the diff before committing. For large ledgers, save the encrypted file and replace it using an authenticated Git client.
 4. Return to Tally and select **Check save**. The live app receives the update after GitHub Pages deploys the commit.
 
-If another organiser published while you were editing, load the latest version and reapply your changes. Review GitHub's diff before committing when several people edit. **Expenses** includes CSV export in the workspace. **Sports sessions** lets you schedule recurring court fees. Each expense accepts up to three resized JPEG, PNG or WebP images.
+If another organiser published while you were editing, load the latest version and reapply your changes. Review GitHub's diff before committing when several people edit. **Expenses** includes CSV export in the workspace. Each expense accepts up to three resized JPEG, PNG or WebP images.
 
 ## Data and limitations
 

@@ -156,18 +156,7 @@ details[open] > summary .chevron { transform: rotate(180deg); }
 .add-expense { grid-column: 1 / -1; justify-self: stretch; }
 
 .summary-panel { border-block: 1px solid var(--line); padding-bottom: 9px; }
-.summary-heading { display: flex; align-items: center; justify-content: space-between; gap: 0 6px; flex-wrap: wrap; }
-.summary-title, .identity { display: flex; align-items: center; gap: 6px; }
-.summary-title { min-height: 44px; }
-.summary-title h2 { font-size: .92rem; font-weight: 740; letter-spacing: -.02em; }
-.identity { color: var(--muted); font-size: .77rem; max-width: 100%; }
-.identity > span { white-space: nowrap; }
-.member-select:empty { display: none; }
-.choose-balance { font-size: .84rem; }
-.identity select {
-  min-height: 44px; max-width: clamp(126px, 46vw, 230px); font-size: .79rem; font-weight: 650;
-  background: transparent; color: var(--ink);
-}
+.summary-title { padding-block: 8px; font-size: .92rem; font-weight: 740; letter-spacing: -.02em; }
 select option, select optgroup { background: var(--surface); color: var(--ink); }
 .metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--line); padding-top: 8px; }
 .metrics > div { min-width: 0; padding-inline: 6px; }
@@ -242,7 +231,6 @@ select option, select optgroup { background: var(--surface); color: var(--ink); 
 .photo-counter { display: inline-flex; align-items: center; gap: 3px; margin-left: 2px; color: var(--accent); }
 .receipt-photos { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); gap: 9px; margin-top: 6px; }
 .receipt-photos img { max-height: 360px; width: 100%; object-fit: contain; background: var(--surface); border: 1px solid var(--line); border-radius: 7px; }
-.session-shortcut { margin-top: 3px; }
 
 .filters { display: grid; gap: 6px; margin-bottom: 8px; }
 .filter-selects { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
@@ -283,7 +271,6 @@ select option, select optgroup { background: var(--surface); color: var(--ink); 
 .sheet-head h2 { font-size: 1.36rem; font-weight: 760; letter-spacing: -.03em; padding-top: 6px; }
 .sheet-head p { color: var(--muted); margin-top: 3px; font-size: .86rem; }
 .sheet-back { margin-top: -5px; }
-.sheet-next { margin-top: 11px; }
 .form-stack, .settings-stack { display: grid; gap: 8px; }
 fieldset.form-stack { min-width: 0; }
 .form-stack > .button, .settings-stack > .button, .settings-section > .text-button, .settings-section form > .button { justify-self: start; }
@@ -310,7 +297,7 @@ input[type="checkbox"] { accent-color: var(--primary); width: 17px; height: 17px
 .settings-section:last-child { border-bottom: 0; padding-bottom: 0; }
 .settings-section h3 { display: flex; gap: 7px; align-items: center; font-weight: 735; }
 .settings-section h3 svg { color: var(--accent); }
-.settings-section p, .session-item p { color: var(--muted); font-size: .84rem; }
+.settings-section p { color: var(--muted); font-size: .84rem; }
 .settings-section .notice.danger p, .settings-section p.notice.danger { color: var(--red); }
 .settings-error { margin-bottom: 9px; }
 .account-panel { display: grid; gap: 11px; }
@@ -338,9 +325,6 @@ input[type="checkbox"] { accent-color: var(--primary); width: 17px; height: 17px
 :root[data-theme="dark"] .google-sign-in-dark { display: block; }
 .account-divider { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: .84rem; }
 .account-divider::before, .account-divider::after { content: ''; flex: 1; height: 1px; background: var(--line); }
-.session-item { border: 1px solid var(--line); border-radius: 9px; padding: 10px 11px; }
-.session-item h3 { font-weight: 730; }
-.session-item .inline-actions { margin-top: 7px; }
 .roster-list { border-top: 1px solid var(--line); }
 .roster-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; padding-block: 3px; align-items: center; min-height: 49px; border-bottom: 1px solid var(--line); }
 .roster-row .text-button { min-width: 44px; }
@@ -375,8 +359,6 @@ input[type="checkbox"] { accent-color: var(--primary); width: 17px; height: 17px
 
 @media (max-width: 375px) {
   .header-admin > svg { display: none; }
-  .expense-export { min-width: 44px; }
-  .expense-export span { display: none; }
   .calendar-grid { gap: 0; }
   .calendar-surface { margin-inline: -14px; padding-inline: 2px; }
 }

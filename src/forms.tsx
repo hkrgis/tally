@@ -1,10 +1,10 @@
 import { useRef, useState, type FormEvent, type ReactNode, type Ref } from 'react'
-import { Camera, Plus, Trash2, UsersRound, X } from 'lucide-react'
-import { categories, currencies, frequencies, groupPaymentMethods, isProfileEmoji, maxExpensePhotos, nextSessionDate, splitMethods, today, type AppData, type Expense, type ExpensePhoto, type Group, type Member, type MemberAvatar, type Payment, type SportsSession } from './model'
+import { Camera, Trash2, UsersRound, X } from 'lucide-react'
+import { categories, currencies, groupPaymentMethods, isProfileEmoji, maxExpensePhotos, splitMethods, today, type AppData, type Expense, type ExpensePhoto, type Group, type Member, type MemberAvatar, type Payment } from './model'
 import { calculateBalances, decimal, minorDigits, money, parseUnits, type PairBalance } from './money'
 import { firstName } from './people'
 import { methodLabels } from './screens'
-import { Avatar, formatDay } from './ui'
+import { Avatar } from './ui'
 import { errorText } from './useLedger'
 import { photoTypes, preparePhoto, prepareProfilePhoto } from './photos'
 import { maxPasswordLength, minPasswordLength } from './vault'
@@ -79,21 +79,20 @@ function PaymentMethodField({ group, value, setValue }: { group: Group; value: s
   </>
 }
 
-export function ExpenseForm({ group, members, nameOf, memberId, expense, session, occurrenceDate, save, remove, manageMembers, manageButton }: RecordContext & {
-  memberId: string; expense?: Expense; session?: SportsSession; occurrenceDate?: string;
+export function ExpenseForm({ group, members, nameOf, memberId, expense, occurrenceDate, save, remove, manageMembers, manageButton }: RecordContext & {
+  memberId: string; expense?: Expense; occurrenceDate?: string;
   save: (expense: Expense) => void | Promise<void>; remove?: EditAction;
   manageMembers: () => void; manageButton: Ref<HTMLButtonElement>;
 }) {
   const active = members.filter(member => member.active)
-  const preferred = active.find(member => member.id === session?.payerId)?.id ??
-    active.find(member => member.id === memberId)?.id
+  const preferred = active.find(member => member.id === memberId)?.id
   const formatAmount = (value: number) => decimal(value, group.currency)
   const amountPlaceholder = formatAmount(0)
   const moneyDigits = minorDigits(group.currency)
-  const [description, setDescription] = useState(expense?.description ?? session?.name ?? '')
-  const [amount, setAmount] = useState(expense ? formatAmount(expense.amount) : session ? formatAmount(session.amount) : '')
+  const [description, setDescription] = useState(expense?.description ?? '')
+  const [amount, setAmount] = useState(expense ? formatAmount(expense.amount) : '')
   const [date, setDate] = useState(expense?.date ?? occurrenceDate ?? today())
-  const [category, setCategory] = useState<Expense['category']>(expense?.category ?? (session ? 'Sports' : 'Other'))
+  const [category, setCategory] = useState<Expense['category']>(expense?.category ?? 'Other')
   const [notes, setNotes] = useState(expense?.notes ?? '')
   const [paymentMethod, setPaymentMethod] = useState(expense?.paymentMethod ?? '')
   const [photos, setPhotos] = useState<ExpensePhoto[]>(expense?.photos ?? [])
@@ -108,7 +107,7 @@ export function ExpenseForm({ group, members, nameOf, memberId, expense, session
   }
   const [payers, setPayers] = useState<Choice>(expense ? fields(expense.payers, formatAmount) : preferred ? { [preferred]: amount } : {})
   const [participants, setParticipants] = useState<Choice>(expense ? fields(expense.split.participants, splitValue) :
-    Object.fromEntries(active.filter(member => !session || session.attendeeIds.includes(member.id)).map(member => [member.id, '1'])))
+    Object.fromEntries(active.map(member => [member.id, '1'])))
   const available = members.filter(member => member.active || selected(payers, member.id) || selected(participants, member.id) ||
     expense?.payers.some(payer => payer.memberId === member.id) || expense?.split.participants.some(person => person.memberId === member.id))
   const payerCount = Object.keys(payers).length
@@ -133,7 +132,7 @@ export function ExpenseForm({ group, members, nameOf, memberId, expense, session
     if (method === 'weighted' && shares.some(share => !share.amount)) throw new Error('Each selected participant needs at least one share.')
     return save({ id: expense?.id ?? crypto.randomUUID(), groupId: group.id, description, amount: total, date, category, notes,
       photos: photos.length ? photos : undefined, paymentMethod: paymentMethod.trim() || undefined,
-      payers: expensesPayers, split: { method, participants: shares }, sessionId: expense?.sessionId ?? session?.id })
+      payers: expensesPayers, split: { method, participants: shares }, sessionId: expense?.sessionId })
   }
   async function attach(files: File[]) {
     if (!files.length) return
@@ -154,7 +153,7 @@ export function ExpenseForm({ group, members, nameOf, memberId, expense, session
     <Field label="Description"><input required maxLength={100} value={description} onChange={event => setDescription(event.target.value)} placeholder="e.g. Dinner for four" /></Field>
     <div className="form-grid">
       <Field label={`Total (${group.currency})`}><input inputMode="decimal" required value={amount} onChange={event => setAmount(event.target.value)} placeholder={amountPlaceholder} /></Field>
-      <Field label="Date"><input type="date" required min={session && !expense ? session.startDate : undefined} value={date} onChange={event => setDate(event.target.value)} /></Field>
+      <Field label="Date"><input type="date" required value={date} onChange={event => setDate(event.target.value)} /></Field>
     </div>
     <Field label="Category"><select value={category} onChange={event => setCategory(event.target.value as Expense['category'])}>
       {categories.map(value => <option key={value}>{value}</option>)}
@@ -177,7 +176,7 @@ export function ExpenseForm({ group, members, nameOf, memberId, expense, session
       {splitMethods.map(value => <option key={value} value={value}>{methodLabels[value]}</option>)}
     </select></Field>
     <fieldset className="choice-group">
-      <legend>{session ? 'Attendees' : 'Participants'}</legend>
+      <legend>Participants</legend>
       <div className="choice-toolbar">
         <button type="button" className="text-button" ref={manageButton} onClick={manageMembers}>
           <UsersRound size={16} aria-hidden="true" />Manage members
@@ -346,62 +345,6 @@ export function MemberForm({ group, member, defaultName, canLink, save }: {
   </RecordForm>
 }
 
-export function SessionForm({ group, members, nameOf, session, save }: RecordContext & {
-  session?: SportsSession; save: (session: SportsSession) => void | Promise<void>;
-}) {
-  const available = members.filter(member => member.active || member.id === session?.payerId || session?.attendeeIds.includes(member.id))
-  const [name, setName] = useState(session?.name ?? '')
-  const [amount, setAmount] = useState(session ? decimal(session.amount, group.currency) : '')
-  const [startDate, setStartDate] = useState(session?.startDate ?? today())
-  const [frequency, setFrequency] = useState(session?.frequency ?? 'Weekly')
-  const [payerId, setPayerId] = useState(session?.payerId ?? available[0]?.id ?? '')
-  const [attendees, setAttendees] = useState(session?.attendeeIds ?? available.map(member => member.id))
-  const [active, setActive] = useState(session?.active ?? true)
-  return <RecordForm submit={() => save({ id: session?.id ?? crypto.randomUUID(), groupId: group.id, name, amount: parseUnits(amount, minorDigits(group.currency)), startDate, frequency, payerId, attendeeIds: attendees, active })}>
-    <Field label="Session name"><input required maxLength={100} value={name} onChange={event => setName(event.target.value)} placeholder="e.g. Wednesday tennis" /></Field>
-    <div className="form-grid">
-      <Field label={`Court fee (${group.currency})`}><input required inputMode="decimal" value={amount} onChange={event => setAmount(event.target.value)} /></Field>
-      <Field label="First session"><input required type="date" value={startDate} onChange={event => setStartDate(event.target.value)} /></Field>
-    </div>
-    <div className="form-grid">
-      <Field label="Repeats"><select value={frequency} onChange={event => setFrequency(event.target.value as SportsSession['frequency'])}>
-        {frequencies.map(value => <option key={value}>{value}</option>)}
-      </select></Field>
-      <Field label="Usual payer"><select required value={payerId} onChange={event => setPayerId(event.target.value)}>
-        <option value="">Select a member</option>{available.map(member => <option value={member.id} key={member.id}>{nameOf(member.id)}</option>)}
-      </select></Field>
-    </div>
-    <fieldset className="choice-group"><legend>Usual attendees</legend>
-      {available.map(member => <label className="check-line" key={member.id}>
-        <input type="checkbox" checked={attendees.includes(member.id)} onChange={event => setAttendees(event.target.checked
-          ? [...attendees, member.id] : attendees.filter(id => id !== member.id))} />{nameOf(member.id)}
-      </label>)}
-    </fieldset>
-    {session && <label className="check-line"><input type="checkbox" checked={active} onChange={event => setActive(event.target.checked)} />Schedule is active</label>}
-  </RecordForm>
-}
-
-export function SessionsList({ sessions, expenses, currency, edit, record, create }: {
-  sessions: SportsSession[]; expenses: Expense[]; currency: string;
-  edit?: (session: SportsSession) => void; record?: (session: SportsSession, date: string) => void; create?: () => void;
-}) {
-  return <div className="form-stack">
-    {sessions.length === 0 && <p className="muted">No recurring sports sessions for this group yet.</p>}
-    {sessions.map(session => {
-      const date = nextSessionDate(session, expenses)
-      return <section className="session-item" key={session.id}>
-        <h3>{session.name}</h3>
-        <p>{session.frequency} · {money(session.amount, currency)}{!session.active ? ' · Paused' : date ? ` · Next ${formatDay(date, true)}` : ' · Schedule complete'}</p>
-        {edit && <div className="inline-actions">
-          <button className="button button-small" onClick={() => edit(session)}>Edit schedule</button>
-          {session.active && date && record && <button className="button primary button-small" onClick={() => record(session, date)}>Record session</button>}
-        </div>}
-      </section>
-    })}
-    {create && <button className="button" onClick={create}><Plus size={17} />New schedule</button>}
-  </div>
-}
-
 export function groupCurrencyLocked(data: AppData, groupId: string) {
-  return [data.expenses, data.payments, data.sessions].some(records => records.some(record => record.groupId === groupId))
+  return [data.expenses, data.payments].some(records => records.some(record => record.groupId === groupId))
 }

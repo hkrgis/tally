@@ -26,23 +26,6 @@ export const OwedIcon = () => <ArrowDownLeft size={17} aria-hidden="true" />
 const tones = ['lavender', 'peach', 'green', 'blue', 'neutral']
 export const nameInitial = (name: string) => (Array.from(firstName(name))[0] ?? '').toUpperCase()
 
-export function MemberSelect({ members, nameOf, value, ownMember, select, addSelf }: {
-  members: Member[]; nameOf: (id: string) => string; value: string; ownMember: string; select: (id: string) => void; addSelf?: () => void;
-}) {
-  return <div className="inline-actions member-select">
-    {members.length > 0 && <label className="identity">
-      <span>View as</span>
-      <select aria-label="Viewing as" value={value} onChange={event => select(event.target.value)}>
-        {!value && <option value="" disabled>Choose member</option>}
-        {members.map(member => <option value={member.id} key={member.id}>
-          {nameOf(member.id)}{member.id === ownMember ? ' (you)' : ''}{member.active ? '' : ' (inactive)'}
-        </option>)}
-      </select>
-    </label>}
-    {addSelf && <button className="text-button" onClick={addSelf}>Add myself</button>}
-  </div>
-}
-
 export function MemberRoster({ members, nameOf, edit, addSelf }: {
   members: Member[]; nameOf: (id: string) => string; edit?: (member?: Member) => void; addSelf?: () => void;
 }) {

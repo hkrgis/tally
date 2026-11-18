@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import published from '../public/app.json'
-import { groupPaymentMethods, isProfileEmoji, nextSessionDate, parseData, registerPaymentMethod, type AppData } from './model'
+import { groupPaymentMethods, isProfileEmoji, parseData, registerPaymentMethod, type AppData } from './model'
 import { parseDirectory } from './vault'
 
 const sample: AppData = {
@@ -51,11 +51,12 @@ describe('published ledger validation', () => {
     copy.expenses[0].split.method = 'weighted'
     expect(() => parseData(copy)).toThrow('split values')
   })
-  it('rejects duplicate recurring dates', () => {
+  it('retains legacy schedule records and allows editing their expenses as regular transactions', () => {
     const copy = structuredClone(sample)
-    const booking = copy.expenses.find(expense => expense.sessionId)!
-    copy.expenses.push({ ...booking, id: 'duplicate-booking' })
-    expect(() => parseData(copy)).toThrow('only be recorded once')
+    copy.expenses.push({ ...copy.expenses[0], id: 'other-court-hire', date: '2026-11-18' })
+    const data = parseData(copy)
+    data.expenses[0].date = data.expenses[1].date
+    expect(parseData(data)).toEqual(data)
   })
   it('reuses default and custom payment methods while accepting older records', () => {
     const data = parseData(sample)
@@ -71,14 +72,5 @@ describe('published ledger validation', () => {
     expect(isProfileEmoji('🇦🇺')).toBe(true)
     expect(isProfileEmoji('🏓🏓')).toBe(false)
     expect(isProfileEmoji('User')).toBe(false)
-  })
-  it('advances weekly sessions, and keeps the monthly anchor after short months', () => {
-    const data = parseData(sample)
-    const session = data.sessions[0]
-    const booking = data.expenses.find(expense => expense.sessionId === session.id)!
-    expect(nextSessionDate(session, data.expenses)).toBe('2026-11-18')
-    const monthly = { ...session, startDate: '2026-01-31', frequency: 'Monthly' as const }
-    expect(nextSessionDate(monthly, [{ ...booking, date: '2026-01-31' }])).toBe('2026-02-28')
-    expect(nextSessionDate(monthly, [{ ...booking, date: '2026-02-28' }])).toBe('2026-03-31')
   })
 })

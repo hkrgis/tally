@@ -5,7 +5,6 @@ z.config(en())
 
 export const categories = ['Food & drink', 'Groceries', 'Transport', 'Home', 'Sports', 'Entertainment', 'Travel', 'Other'] as const
 export const splitMethods = ['equal', 'percentage', 'exact', 'weighted'] as const
-export const frequencies = ['Weekly', 'Fortnightly', 'Monthly'] as const
 export const currencies = Intl.supportedValuesOf('currency')
 const minorAmount = z.int().check(z.maximum(1_000_000_000_000))
 const positive = minorAmount.check(z.minimum(1))
@@ -65,8 +64,9 @@ const paymentSchema = z.object({
   id, groupId: id, from: id, to: id, amount: positive, date: day, notes,
   paymentMethod: z.optional(paymentMethod),
 })
+// Older encrypted ledgers retain their schedule metadata when expenses are edited.
 const sessionSchema = z.object({
-  id, groupId: id, name: title, amount: positive, startDate: day, frequency: z.enum(frequencies),
+  id, groupId: id, name: title, amount: positive, startDate: day, frequency: z.enum(['Weekly', 'Fortnightly', 'Monthly']),
   payerId: id, attendeeIds: z.array(id).check(z.minLength(1)), active: z.boolean(),
 })
 const activitySchema = z.object({
@@ -88,7 +88,6 @@ export type MemberAvatar = z.infer<typeof avatarSchema>
 export type Expense = z.infer<typeof expenseSchema>
 export type ExpensePhoto = z.infer<typeof photoSchema>
 export type Payment = z.infer<typeof paymentSchema>
-export type SportsSession = z.infer<typeof sessionSchema>
 export type Activity = z.infer<typeof activitySchema>
 export type SplitMethod = Expense['split']['method']
 
@@ -126,10 +125,8 @@ export function parseData(input: unknown): AppData {
   }))
   const members = new Map(data.members.map(member => [member.id, member.groupId]))
   const sessions = new Map(data.sessions.map(session => [session.id, session.groupId]))
-  const occurrences = data.expenses.flatMap(expense => expense.sessionId ? [`${expense.sessionId}:${expense.date}`] : [])
   const tables = [data.groups, data.members, data.expenses, data.payments, data.sessions, data.activity]
   if (tables.some(records => !unique(records.map(record => record.id)))) throw new Error('Record IDs must be unique within each table.')
-  if (!unique(occurrences)) throw new Error('A sports session can only be recorded once per date.')
   for (const records of tables.slice(1)) {
     if (records.some(record => 'groupId' in record && !groups.has(record.groupId))) throw new Error('A record refers to an unknown group.')
   }
@@ -181,24 +178,6 @@ export function parseData(input: unknown): AppData {
     }
   }
   return data
-}
-
-export function nextSessionDate(session: SportsSession, expenses: Expense[]) {
-  const latest = expenses.filter(expense => expense.sessionId === session.id && expense.date >= session.startDate)
-    .map(expense => expense.date).sort().at(-1)
-  if (!latest) return session.startDate
-  const date = new Date(`${latest}T00:00:00Z`)
-  if (session.frequency === 'Monthly') {
-    const dayOfMonth = Number(session.startDate.slice(8))
-    date.setUTCDate(1)
-    date.setUTCMonth(date.getUTCMonth() + 1)
-    const endOfMonth = new Date(date)
-    endOfMonth.setUTCMonth(endOfMonth.getUTCMonth() + 1, 0)
-    date.setUTCDate(Math.min(dayOfMonth, endOfMonth.getUTCDate()))
-  } else {
-    date.setUTCDate(date.getUTCDate() + (session.frequency === 'Weekly' ? 7 : 14))
-  }
-  return date.getUTCFullYear() > 9999 ? null : date.toISOString().slice(0, 10)
 }
 
 export function today() {
