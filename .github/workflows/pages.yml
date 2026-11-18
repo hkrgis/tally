@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -27,7 +27,7 @@ jobs:
         env:
           VITE_GITHUB_REPOSITORY: ${{ github.repository }}
           VITE_GITHUB_BRANCH: ${{ github.event.repository.default_branch }}
-      - uses: actions/upload-pages-artifact@v4
+      - uses: actions/upload-pages-artifact@v5
         if: github.event_name != 'pull_request' && github.ref_name == github.event.repository.default_branch
         with:
           path: dist
@@ -35,7 +35,7 @@ jobs:
   deploy:
     if: github.event_name != 'pull_request' && github.ref_name == github.event.repository.default_branch
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       pages: write
@@ -44,6 +44,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/configure-pages@v5
-      - uses: actions/deploy-pages@v4
+      - name: Check GitHub Pages configuration
+        uses: actions/configure-pages@v6
+      - uses: actions/deploy-pages@v5
         id: deployment

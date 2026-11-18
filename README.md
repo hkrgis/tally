@@ -21,6 +21,8 @@ npm run preview
 3. Run **Check and deploy to GitHub Pages** from the **Actions** tab, or push to the default branch. The workflow supplies the repository name and branch to the build. Vite uses relative URLs so the build works on a project subpath and at the root.
 4. Open the deployment URL shown in Actions. The site can be installed from a supporting browser. After an online visit, the service worker can display the most recently cached published ledger offline.
 
+If the **Check GitHub Pages configuration** step returns 404, open the repository's **Settings → Pages** as a repository admin and save **GitHub Actions** as the source. Then run the workflow again from the default branch.
+
 [GitHub Pages workflow documentation](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)
 
 To start with a blank ledger, replace the example contents before your first deployment.
