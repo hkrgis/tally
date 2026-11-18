@@ -1,4 +1,4 @@
-import { parseData, type AppData } from './model'
+import { parseDirectory, type Directory } from './vault'
 
 const repository: string = import.meta.env.VITE_GITHUB_REPOSITORY ?? ''
 const branch: string = import.meta.env.VITE_GITHUB_BRANCH ?? 'main'
@@ -11,7 +11,7 @@ export const repositoryUrl = hasRepository ? `https://github.com/${repository}` 
 export const editUrl = hasRepository ? `${repositoryUrl}/edit/${ref}/${path}` : ''
 export const dataUrl = new URL(`${import.meta.env.BASE_URL}app.json`, document.baseURI)
 
-export type Snapshot = { data: AppData; sha: string }
+export type Snapshot = { data: Directory; sha: string }
 export type GitHubSession = { token: string; actor: string }
 
 export class StaleDataError extends Error {
@@ -20,7 +20,7 @@ export class StaleDataError extends Error {
   }
 }
 
-export function serialize(data: AppData) {
+export function serialize(data: Directory) {
   return JSON.stringify(data, null, 2) + '\n'
 }
 
@@ -34,12 +34,12 @@ async function request(url: URL | string, options: RequestInit) {
   }
 }
 
-export async function readPublished(revision?: string): Promise<{ data: AppData; offline: boolean }> {
+export async function readPublished(revision?: string): Promise<{ data: Directory; offline: boolean }> {
   const url = new URL(dataUrl)
   if (revision) url.searchParams.set('revision', `${revision}-${Math.floor(Date.now() / 15_000)}`)
   const response = await request(url, { cache: 'no-store' })
   if (!response.ok) throw new Error('Published data could not be loaded. Try refreshing.')
-  return { data: parseData(await response.json()), offline: response.headers.get('X-Tally-Offline') === '1' }
+  return { data: parseDirectory(await response.json()), offline: response.headers.get('X-Tally-Offline') === '1' }
 }
 
 async function github(url: string, token: string, options: RequestInit = {}) {
@@ -90,7 +90,7 @@ export async function readRepository(token: string): Promise<Snapshot> {
   const file = await repositoryFile(token)
   const blob = file.encoding === 'base64' ? file : await github(`${api}/git/blobs/${file.sha}`, token)
   if (blob.encoding !== 'base64' || typeof blob.content !== 'string') throw new Error('GitHub could not return the JSON contents.')
-  return { data: parseData(JSON.parse(fromBase64(blob.content))), sha: file.sha }
+  return { data: parseDirectory(JSON.parse(fromBase64(blob.content))), sha: file.sha }
 }
 
 export async function connectGitHub(token: string) {
@@ -103,7 +103,7 @@ export async function connectGitHub(token: string) {
   return { session: { token, actor: profile.login }, snapshot }
 }
 
-export async function writeRepository(session: GitHubSession, expectedSha: string, data: AppData): Promise<Snapshot> {
+export async function writeRepository(session: GitHubSession, expectedSha: string, data: Directory): Promise<Snapshot> {
   const latest = await repositoryFile(session.token)
   if (latest.sha !== expectedSha) throw new StaleDataError()
   try {
@@ -121,8 +121,7 @@ export async function writeRepository(session: GitHubSession, expectedSha: strin
   } catch (error) {
     // GitHub can accept a write even when its response is lost.
     const current = await readRepository(session.token).catch(() => null)
-    const eventId = data.activity.at(-1)?.id
-    if (current && (current.data.revision === data.revision || current.data.activity.some(event => event.id === eventId))) return current
+    if (current && current.data.revision === data.revision) return current
     if (current && current.sha !== expectedSha) throw new StaleDataError()
     throw error
   }

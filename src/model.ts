@@ -15,6 +15,14 @@ const day = z.iso.date()
 const title = z.string().check(z.trim(), z.minLength(1), z.maxLength(100))
 const notes = z.string().check(z.maxLength(1000))
 const entry = z.object({ memberId: id, amount: positive })
+export const maxExpensePhotos = 3
+export const maxPhotoBytes = 240_000
+const photoSchema = z.object({
+  id,
+  name: title,
+  source: z.string().check(z.maxLength(23 + 4 * Math.ceil(maxPhotoBytes / 3)),
+    z.regex(/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/)),
+})
 
 const groupSchema = z.object({
   id, name: title, description: z.string().check(z.maxLength(240)),
@@ -25,6 +33,7 @@ const memberSchema = z.object({ id, groupId: id, name: title, active: z.boolean(
 const expenseSchema = z.object({
   id, groupId: id, description: title, amount: positive, date: day,
   category: z.enum(categories), notes, payers: z.array(entry).check(z.minLength(1)),
+  photos: z.optional(z.array(photoSchema).check(z.maxLength(maxExpensePhotos))),
   split: z.object({
     method: z.enum(splitMethods),
     participants: z.array(z.object({ memberId: id, amount: minorAmount.check(z.minimum(0)) })).check(z.minLength(1)),
@@ -54,6 +63,7 @@ export type AppData = z.infer<typeof documentSchema>
 export type Group = z.infer<typeof groupSchema>
 export type Member = z.infer<typeof memberSchema>
 export type Expense = z.infer<typeof expenseSchema>
+export type ExpensePhoto = z.infer<typeof photoSchema>
 export type Payment = z.infer<typeof paymentSchema>
 export type SportsSession = z.infer<typeof sessionSchema>
 export type Activity = z.infer<typeof activitySchema>
@@ -82,6 +92,7 @@ export function parseData(input: unknown): AppData {
   }
   const inGroup = (groupId: string, ids: string[]) => ids.every(memberId => members.get(memberId) === groupId)
   for (const expense of data.expenses) {
+    if (expense.photos && !unique(expense.photos.map(photo => photo.id))) throw new Error('Expense photo IDs must be unique.')
     const payerIds = expense.payers.map(payer => payer.memberId)
     const participantIds = expense.split.participants.map(participant => participant.memberId)
     const { method, participants } = expense.split

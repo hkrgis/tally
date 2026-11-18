@@ -1,42 +1,50 @@
-import { useState, type FormEvent, type ReactNode } from 'react'
-import { Plus, Trash2 } from 'lucide-react'
-import { categories, currencies, frequencies, nextSessionDate, splitMethods, today, type AppData, type Expense, type Group, type Member, type Payment, type SportsSession } from './model'
+import { useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { Camera, Plus, Trash2, X } from 'lucide-react'
+import { categories, currencies, frequencies, maxExpensePhotos, nextSessionDate, splitMethods, today, type AppData, type Expense, type ExpensePhoto, type Group, type Member, type Payment, type SportsSession } from './model'
 import { calculateBalances, decimal, minorDigits, money, parseUnits, type PairBalance } from './money'
 import { methodLabels } from './screens'
 import { formatDay } from './ui'
 import { errorText } from './useLedger'
+import { photoTypes, preparePhoto } from './photos'
+import { maxPasswordLength, minPasswordLength } from './vault'
 
 type Field = { label: string; children: ReactNode }
 function Field({ label, children }: Field) {
   return <label className="field"><span>{label}</span>{children}</label>
 }
 
-function RecordForm({ children, submit, submitLabel = 'Save to draft', remove }: {
-  children: ReactNode; submit: () => void; submitLabel?: string; remove?: () => void;
+type EditAction = () => void | Promise<void>
+
+function RecordForm({ children, submit, submitLabel = 'Save to draft', remove, blocked }: {
+  children: ReactNode; submit: EditAction; submitLabel?: string; remove?: EditAction; blocked?: boolean;
 }) {
   const [error, setError] = useState('')
   const [confirm, setConfirm] = useState(false)
-  function run(action: () => void) {
+  const [busy, setBusy] = useState(false)
+  async function run(action: EditAction) {
+    if (busy) return
+    setBusy(true)
     setError('')
-    try { action() } catch (issue) { setError(errorText(issue)) }
+    try { await action() } catch (issue) { setError(errorText(issue)) }
+    finally { setBusy(false) }
   }
   function onSubmit(event: FormEvent) {
     event.preventDefault()
-    run(submit)
+    if (!confirm && !blocked) void run(submit)
   }
   return <form className="form-stack" onSubmit={onSubmit}>
-    {children}
+    <fieldset className="form-stack" disabled={busy}>{children}</fieldset>
     {error && <p className="notice danger" role="alert">{error}</p>}
     {confirm && <div className="notice danger">
       <p>Remove this record from the draft and add a correction to Activity?</p>
       <div className="inline-actions">
-        <button type="button" className="button danger-button" onClick={() => remove && run(remove)}>Remove record</button>
-        <button type="button" className="button" onClick={() => setConfirm(false)}>Keep record</button>
+        <button type="button" className="button danger-button" disabled={busy} onClick={() => remove && void run(remove)}>Remove record</button>
+        <button type="button" className="button" disabled={busy} onClick={() => setConfirm(false)}>Keep record</button>
       </div>
     </div>}
     <footer className="form-footer">
-      {remove && !confirm && <button type="button" className="text-button negative" onClick={() => setConfirm(true)}><Trash2 size={16} />Remove</button>}
-      <button className="button primary" type="submit" disabled={confirm}>{submitLabel}</button>
+      {remove && !confirm && <button type="button" className="text-button negative" disabled={busy || blocked} onClick={() => setConfirm(true)}><Trash2 size={16} />Remove</button>}
+      <button className="button primary" type="submit" disabled={busy || confirm || blocked}>{busy ? 'Saving…' : submitLabel}</button>
     </footer>
   </form>
 }
@@ -55,7 +63,7 @@ const selected = (choices: Choice, id: string) => Object.hasOwn(choices, id)
 
 export function ExpenseForm({ group, members, memberId, expense, session, occurrenceDate, save, remove }: RecordContext & {
   memberId: string; expense?: Expense; session?: SportsSession; occurrenceDate?: string;
-  save: (expense: Expense) => void; remove?: () => void;
+  save: (expense: Expense) => void | Promise<void>; remove?: EditAction;
 }) {
   const active = members.filter(member => member.active)
   const preferred = active.find(member => member.id === session?.payerId)?.id ??
@@ -68,6 +76,10 @@ export function ExpenseForm({ group, members, memberId, expense, session, occurr
   const [date, setDate] = useState(expense?.date ?? occurrenceDate ?? today())
   const [category, setCategory] = useState<Expense['category']>(expense?.category ?? (session ? 'Sports' : 'Other'))
   const [notes, setNotes] = useState(expense?.notes ?? '')
+  const [photos, setPhotos] = useState<ExpensePhoto[]>(expense?.photos ?? [])
+  const [preparing, setPreparing] = useState(false)
+  const [photoError, setPhotoError] = useState('')
+  const picker = useRef<HTMLInputElement>(null)
   const [method, setMethod] = useState(expense?.split.method ?? 'equal')
   function splitValue(value: number) {
     if (expense?.split.method === 'exact') return formatAmount(value)
@@ -97,10 +109,26 @@ export function ExpenseForm({ group, members, memberId, expense, session, occurr
     if (method === 'percentage' && shares.reduce((sum, share) => sum + share.amount, 0) !== 10_000) throw new Error('Percentages must add up to 100%.')
     if (method === 'exact' && shares.reduce((sum, share) => sum + share.amount, 0) !== total) throw new Error('Share amounts must add up to the total.')
     if (method === 'weighted' && shares.some(share => !share.amount)) throw new Error('Each selected participant needs at least one share.')
-    save({ id: expense?.id ?? crypto.randomUUID(), groupId: group.id, description, amount: total, date, category, notes,
+    return save({ id: expense?.id ?? crypto.randomUUID(), groupId: group.id, description, amount: total, date, category, notes,
+      photos: photos.length ? photos : undefined,
       payers: expensesPayers, split: { method, participants: shares }, sessionId: expense?.sessionId ?? session?.id })
   }
-  return <RecordForm submit={submit} remove={remove}>
+  async function attach(files: File[]) {
+    if (!files.length) return
+    setPhotoError('')
+    if (photos.length + files.length > maxExpensePhotos) {
+      setPhotoError(`Choose up to ${maxExpensePhotos} photos per expense.`)
+      return
+    }
+    setPreparing(true)
+    try {
+      const additions: ExpensePhoto[] = []
+      for (const file of files) additions.push(await preparePhoto(file))
+      setPhotos(current => [...current, ...additions])
+    } catch (issue) { setPhotoError(errorText(issue)) }
+    finally { setPreparing(false) }
+  }
+  return <RecordForm submit={submit} remove={remove} blocked={preparing}>
     <Field label="Description"><input required maxLength={100} value={description} onChange={event => setDescription(event.target.value)} placeholder="e.g. Dinner for four" /></Field>
     <div className="form-grid">
       <Field label={`Total (${group.currency})`}><input inputMode="decimal" required value={amount} onChange={event => setAmount(event.target.value)} placeholder={amountPlaceholder} /></Field>
@@ -136,13 +164,31 @@ export function ExpenseForm({ group, members, memberId, expense, session, occurr
           onChange={event => setParticipants({ ...participants, [member.id]: event.target.value })} />}
       </div>)}
     </fieldset>
-    <Field label="Notes (optional)"><textarea rows={2} maxLength={1000} value={notes} onChange={event => setNotes(event.target.value)} /></Field>
+    <Field label="Notes (optional)"><textarea rows={3} maxLength={1000} value={notes} onChange={event => setNotes(event.target.value)} placeholder="Add context, receipt details or a reminder" /></Field>
+    <fieldset className="choice-group attachment-field">
+      <legend>Photos and receipts</legend>
+      {photos.length > 0 && <ul className="photo-previews">{photos.map(photo => <li key={photo.id}>
+        <img src={photo.source} alt={photo.name} />
+        <span title={photo.name}>{photo.name}</span>
+        <button className="icon-button" type="button" disabled={preparing} aria-label={`Remove ${photo.name}`} onClick={() => setPhotos(current => current.filter(item => item.id !== photo.id))}><X size={16} /></button>
+      </li>)}</ul>}
+      <input ref={picker} type="file" hidden aria-label="Choose expense photos" accept={photoTypes.join(',')} multiple onChange={event => {
+        const files = Array.from(event.target.files ?? [])
+        event.target.value = ''
+        void attach(files)
+      }} />
+      <button className="button button-small" type="button" onClick={() => picker.current?.click()} disabled={preparing || photos.length >= maxExpensePhotos}>
+        <Camera size={17} />{preparing ? 'Preparing photos…' : 'Attach photos'}
+      </button>
+      <p>Up to {maxExpensePhotos} JPEG, PNG or WebP images. Tally resizes photos before saving.</p>
+      {photoError && <p className="notice danger" role="alert">{photoError}</p>}
+    </fieldset>
   </RecordForm>
 }
 
 export function PaymentForm({ group, members, expenses, payments, pair, payment, save, remove }: RecordContext & {
   expenses: Expense[]; payments: Payment[]; pair?: PairBalance; payment?: Payment;
-  save: (payment: Payment) => void; remove?: () => void;
+  save: (payment: Payment) => void | Promise<void>; remove?: EditAction;
 }) {
   const [from, setFrom] = useState(payment?.from ?? pair?.from ?? '')
   const [to, setTo] = useState(payment?.to ?? pair?.to ?? '')
@@ -156,7 +202,7 @@ export function PaymentForm({ group, members, expenses, payments, pair, payment,
     const total = parseUnits(amount, minorDigits(group.currency))
     if (!from || !to || from === to) throw new Error('Select different members for the payer and recipient.')
     if (!total || total > ceiling) throw new Error(`Enter a payment greater than zero and up to ${money(ceiling, group.currency)}.`)
-    save({ id: payment?.id ?? crypto.randomUUID(), groupId: group.id, from, to, amount: total, date, notes })
+    return save({ id: payment?.id ?? crypto.randomUUID(), groupId: group.id, from, to, amount: total, date, notes })
   }
   return <RecordForm submit={submit} remove={remove}>
     <div className="form-grid">
@@ -176,24 +222,39 @@ export function PaymentForm({ group, members, expenses, payments, pair, payment,
   </RecordForm>
 }
 
-export function GroupForm({ group, currencyLocked, save }: { group?: Group; currencyLocked?: boolean; save: (group: Group) => void }) {
+export function GroupForm({ group, currencyLocked, save }: { group?: Group; currencyLocked?: boolean; save: (group: Group, password: string) => Promise<void> }) {
   const [name, setName] = useState(group?.name ?? '')
   const [description, setDescription] = useState(group?.description ?? '')
   const [currency, setCurrency] = useState(group?.currency ?? 'AUD')
   const [archived, setArchived] = useState(group?.archived ?? false)
+  const [rotate, setRotate] = useState(false)
+  const password = useRef<HTMLInputElement>(null)
+  const confirmPassword = useRef<HTMLInputElement>(null)
   const names = new Intl.DisplayNames('en-AU', { type: 'currency' })
-  return <RecordForm submit={() => save({ id: group?.id ?? crypto.randomUUID(), name, description, currency, archived })}>
+  return <RecordForm submit={() => {
+    const access = password.current?.value ?? ''
+    if (access !== (confirmPassword.current?.value ?? '')) throw new Error('The passwords do not match.')
+    return save({ id: group?.id ?? crypto.randomUUID(), name, description, currency, archived }, access)
+  }}>
     <Field label="Group name"><input required maxLength={100} value={name} onChange={event => setName(event.target.value)} /></Field>
+    <p className="muted">The group name appears in the public group list.</p>
     <Field label="Description (optional)"><textarea rows={2} maxLength={240} value={description} onChange={event => setDescription(event.target.value)} /></Field>
     <Field label="Currency"><select disabled={currencyLocked} value={currency} onChange={event => setCurrency(event.target.value)}>
       {currencies.map(value => <option key={value} value={value}>{value} · {names.of(value)}</option>)}
     </select></Field>
     {currencyLocked && <p className="muted">This group’s records use {currency}.</p>}
     {group && <label className="check-line"><input type="checkbox" checked={archived} onChange={event => setArchived(event.target.checked)} />Archive group</label>}
+    {group && <label className="check-line"><input type="checkbox" checked={rotate} onChange={event => setRotate(event.target.checked)} />Change group password</label>}
+    {(!group || rotate) && <>
+      <Field label="Group password"><input ref={password} type="password" autoComplete="new-password" minLength={minPasswordLength} maxLength={maxPasswordLength} required /></Field>
+      <Field label="Confirm group password"><input ref={confirmPassword} type="password" autoComplete="new-password" maxLength={maxPasswordLength} required /></Field>
+      <p className="muted">Use a unique password of at least {minPasswordLength} characters. Save it somewhere safe and share it with your group. Tally cannot recover it.</p>
+      {rotate && <p className="muted">Previous snapshots can still be opened with their original password.</p>}
+    </>}
   </RecordForm>
 }
 
-export function MemberForm({ group, member, save }: { group: Group; member?: Member; save: (member: Member) => void }) {
+export function MemberForm({ group, member, save }: { group: Group; member?: Member; save: (member: Member) => void | Promise<void> }) {
   const [name, setName] = useState(member?.name ?? '')
   const [active, setActive] = useState(member?.active ?? true)
   return <RecordForm submit={() => save({ id: member?.id ?? crypto.randomUUID(), groupId: group.id, name, active })}>
@@ -203,7 +264,7 @@ export function MemberForm({ group, member, save }: { group: Group; member?: Mem
 }
 
 export function SessionForm({ group, members, session, save }: RecordContext & {
-  session?: SportsSession; save: (session: SportsSession) => void;
+  session?: SportsSession; save: (session: SportsSession) => void | Promise<void>;
 }) {
   const available = members.filter(member => member.active || member.id === session?.payerId || session?.attendeeIds.includes(member.id))
   const [name, setName] = useState(session?.name ?? '')

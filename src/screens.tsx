@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowDown, ArrowRight, ArrowUpRight, CalendarDays, ChevronDown, Download, ListFilter, Pencil, Plus, ReceiptText, Search, Wallet } from 'lucide-react'
+import { ArrowDown, ArrowRight, ArrowUpRight, CalendarDays, Camera, ChevronDown, Download, ListFilter, Pencil, Plus, ReceiptText, Search, Wallet } from 'lucide-react'
 import { categories, type Activity, type Expense, type Member, type Payment } from './model'
 import { decimal, expenseCharges, memberBalance, money, splitExpense, type PairBalance } from './money'
 import { download, toCsv } from './storage'
@@ -7,7 +7,7 @@ import { CategoryIcon, Empty, Explanation, formatDay, formatEventTime, OwedIcon,
 
 export const methodLabels = { equal: 'Equal', percentage: 'Percentage', exact: 'Exact amounts', weighted: 'Weighted shares' }
 type Common = { currency: string; nameOf: (id: string) => string }
-type LedgerRows = Common & {
+export type LedgerRows = Common & {
   expenses: Expense[]; payments: Payment[]; canEdit: boolean;
   editExpense: (expense: Expense) => void; editPayment: (payment: Payment) => void;
 }
@@ -32,11 +32,18 @@ function ExpenseBreakdown({ expense, currency, nameOf }: Common & { expense: Exp
     {charges.length ? charges.map(charge => <div className="line" key={`${charge.from}:${charge.to}`}>
       <span>{nameOf(charge.from)} <span aria-label="owes">→</span> {nameOf(charge.to)}</span><strong>{money(charge.amount, currency)}</strong>
     </div>) : <p className="muted">Everyone covered their own share.</p>}
-    {expense.notes && <p className="record-note">{expense.notes}</p>}
+    {expense.notes && <div><h4>Notes</h4><p className="record-note">{expense.notes}</p></div>}
+    {Boolean(expense.photos?.length) && <div>
+      <h4>Photos and receipts</h4>
+      <ul className="receipt-photos">{expense.photos?.map(photo => <li key={photo.id}>
+        <img src={photo.source} alt={photo.name} loading="lazy" />
+        <small>{photo.name}</small>
+      </li>)}</ul>
+    </div>}
   </>
 }
 
-function TransactionRow({ item, currency, nameOf, canEdit, editExpense, editPayment, showDate, memberId }: Omit<LedgerRows, 'expenses' | 'payments'> & {
+export function TransactionRow({ item, currency, nameOf, canEdit, editExpense, editPayment, showDate, memberId }: Omit<LedgerRows, 'expenses' | 'payments'> & {
   item: Transaction; showDate?: boolean; memberId?: string;
 }) {
   if (item.type === 'payment') {
@@ -64,7 +71,9 @@ function TransactionRow({ item, currency, nameOf, canEdit, editExpense, editPaym
     <summary>
       <CategoryIcon category={expense.category} />
       <span className="transaction-text"><strong>{expense.description}</strong>
-        <small><span className="payer-line">{payers} paid</span><span className="middot">·</span>{showDate ? formatDay(expense.date) : `${expense.split.participants.length} ${expense.split.participants.length === 1 ? 'share' : 'shares'}`}</small>
+        <small><span className="payer-line">{payers} paid</span><span className="middot">·</span>{showDate ? formatDay(expense.date) : `${expense.split.participants.length} ${expense.split.participants.length === 1 ? 'share' : 'shares'}`}
+          {Boolean(expense.photos?.length) && <span className="photo-counter" aria-label={`${expense.photos?.length} attached photos`}><Camera size={13} aria-hidden="true" />{expense.photos?.length}</span>}
+        </small>
       </span>
       <span className="transaction-amount">{money(expense.amount, currency)}
         {personalShare && !showDate && <small>Your share {money(personalShare.amount, currency)}</small>}

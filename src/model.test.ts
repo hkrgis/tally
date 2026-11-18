@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import published from '../public/app.json'
 import { nextSessionDate, parseData, type AppData } from './model'
+import { parseDirectory } from './vault'
 
 const sample: AppData = {
   version: 1,
@@ -30,7 +31,7 @@ const sample: AppData = {
 
 describe('published ledger validation', () => {
   it('checks the configured published ledger before deployment', () => {
-    expect(() => parseData(published)).not.toThrow()
+    expect(() => parseDirectory(published)).not.toThrow()
   })
   it('rejects malformed dates, payments across groups, and mismatched payout totals', () => {
     const badDate = structuredClone(sample)

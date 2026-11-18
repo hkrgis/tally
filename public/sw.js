@@ -1,6 +1,6 @@
 const scope = self.registration.scope
 const prefix = `tally:${scope}:`
-const cacheName = `${prefix}v1`
+const cacheName = `${prefix}v2`
 const ledgerUrl = new URL('app.json', scope).href
 const indexUrl = new URL('index.html', scope)
 const entryPaths = [new URL(scope).pathname, indexUrl.pathname]
@@ -15,6 +15,7 @@ self.addEventListener('install', event => {
       .map(([, src]) => new URL(src, scope).href)
     await cache.addAll([...new Set([...assets, ledgerUrl, new URL('icon-512.png', scope).href])])
     await cache.put(scope, response)
+    await self.skipWaiting()
   })())
 })
 
