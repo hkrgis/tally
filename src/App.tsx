@@ -258,7 +258,8 @@ export default function App() {
     if (panel.kind === 'settings') return <Sheet key="settings" title="Settings" close={close} busy={busy}>
       {requestError}
       <Settings theme={theme} changeTheme={value => { setTheme(value); writePref('theme', value) }}
-        busy={busy} refresh={() => request.run(() => ledger.refresh(ledger.publication ?? undefined))} />
+        busy={busy} refresh={() => request.run(() => ledger.refresh(ledger.publication ?? undefined))}
+        manageGitHubGroups={firebaseConfigured && !group && !linkedInvite && !ledger.editor ? () => open({ kind: 'admin' }) : undefined} />
     </Sheet>
     if (panel.kind === 'admin') return <Sheet key="admin" title="Admin workspace" close={close} busy={busy}>
       {requestError}
@@ -271,8 +272,7 @@ export default function App() {
       {accountState.error && <p className="notice danger settings-error" role="alert">{accountState.error}</p>}
       <AccountPanel account={account} loading={accountState.loading} busy={busy} run={request.run}
         newGroup={() => open({ kind: 'group', newAccountGroupId: cloudGroupId() })} openGroup={openInvite}
-        editGroup={group && ledger.cloudOwner ? () => open({ kind: 'group', group }) : undefined}
-        repositoryWorkspace={() => open({ kind: 'admin' })} />
+        editGroup={group && ledger.cloudOwner ? () => open({ kind: 'group', group }) : undefined} />
     </Sheet>
     if (panel.kind === 'invite') return <Sheet key="invite" title="Open an invite" close={close} busy={busy}>
       {requestError}

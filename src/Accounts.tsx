@@ -1,8 +1,10 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { ChevronRight, Mail, Plus } from 'lucide-react'
+import googleSignInDark from './assets/google-signin-dark.png'
+import googleSignInLight from './assets/google-signin-light.png'
 import {
   accountError, checkVerification, firebaseConfigured, isAccountAdmin, listAccountGroups,
-  observeAccount, registerAccount, resendVerification, sendResetEmail, signInAccount,
+  observeAccount, registerAccount, resendVerification, sendResetEmail, signInAccount, signInWithGoogle,
   type Account, type AccountGroup,
 } from './firebase'
 
@@ -29,9 +31,9 @@ export function useAccount() {
 
 type Mode = 'signin' | 'register' | 'reset'
 
-export function AccountPanel({ account, loading, busy, run, newGroup, openGroup, editGroup, repositoryWorkspace }: {
+export function AccountPanel({ account, loading, busy, run, newGroup, openGroup, editGroup }: {
   account: Account | null; loading: boolean; busy: boolean; run: (work: () => Promise<void>) => void;
-  newGroup: () => void; openGroup: (id: string) => void; editGroup?: () => void; repositoryWorkspace: () => void;
+  newGroup: () => void; openGroup: (id: string) => void; editGroup?: () => void;
 }) {
   const [mode, setMode] = useState<Mode>('signin')
   const [email, setEmail] = useState('')
@@ -87,7 +89,15 @@ export function AccountPanel({ account, loading, busy, run, newGroup, openGroup,
   }
 
   return <div className="settings-stack">
-    {loading ? <p role="status" className="muted">Checking your account…</p> : !account ? <>
+    {loading ? <p role="status" className="muted">Checking your account…</p> : !account ? <div className="account-auth">
+      {mode !== 'reset' && <>
+        <button className="google-sign-in" type="button" disabled={busy} onClick={() => perform(signInWithGoogle)}
+          aria-label="Sign in with Google">
+          <img className="google-sign-in-light" src={googleSignInLight} width="180" height="40" alt="" />
+          <img className="google-sign-in-dark" src={googleSignInDark} width="180" height="40" alt="" />
+        </button>
+        <p className="account-divider">or use email</p>
+      </>}
       <form key={mode} className="form-stack" onSubmit={submit}>
         <label className="field"><span>Email</span><input type="email" autoComplete="email" required disabled={busy}
           value={email} onChange={event => setEmail(event.target.value)} /></label>
@@ -104,7 +114,7 @@ export function AccountPanel({ account, loading, busy, run, newGroup, openGroup,
         {mode === 'signin' && <button className="text-button" disabled={busy} onClick={() => choose('register')}>Create account</button>}
         {mode === 'signin' && <button className="text-button" disabled={busy} onClick={() => choose('reset')}>Forgot password?</button>}
       </div>
-    </> : !account.verified ? <div className="form-stack">
+    </div> : !account.verified ? <div className="form-stack">
       <p>Verify <strong>{account.email}</strong> using the link in your email before creating a group.</p>
       <button className="button primary" disabled={busy} onClick={() => perform(checkVerification)}>I’ve verified my email</button>
       <button className="text-button" disabled={busy} onClick={() => perform(async () => {
@@ -141,6 +151,5 @@ export function AccountPanel({ account, loading, busy, run, newGroup, openGroup,
       </form>}
     </>}
     {notice && <p className="notice" role="status">{notice}</p>}
-    <button className="text-button" disabled={busy} onClick={repositoryWorkspace}>Repository workspace</button>
   </div>
 }

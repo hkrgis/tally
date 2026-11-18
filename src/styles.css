@@ -324,6 +324,13 @@ input[type="checkbox"] { accent-color: var(--primary); width: 17px; height: 17px
 .settings-section p, .session-item p { color: var(--muted); font-size: .84rem; }
 .settings-section .notice.danger p, .settings-section p.notice.danger { color: var(--red); }
 .settings-error { margin-bottom: 9px; }
+.account-auth { display: grid; gap: 12px; }
+.account-auth .form-stack > .button { width: 100%; }
+.google-sign-in { justify-self: center; display: grid; place-items: center; min-height: 44px; border-radius: 5px; }
+.google-sign-in-dark, :root[data-theme="dark"] .google-sign-in-light { display: none; }
+:root[data-theme="dark"] .google-sign-in-dark { display: block; }
+.account-divider { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: .84rem; }
+.account-divider::before, .account-divider::after { content: ''; flex: 1; height: 1px; background: var(--line); }
 .session-item { border: 1px solid var(--line); border-radius: 9px; padding: 10px 11px; }
 .session-item h3 { font-weight: 730; }
 .session-item .inline-actions { margin-top: 7px; }

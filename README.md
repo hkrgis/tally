@@ -31,17 +31,17 @@ Open the invite link shared by the organiser, or select **Open an invite** and p
 
 ## Account groups and recovery
 
-With Firebase configured, select **Sign in → Create account**, then verify your email. You can reopen your groups from **Account**. Group edits save to Firestore under the verified owner's account. Viewers can still open an invite and unlock the encrypted records with the shared group password.
+With Firebase configured, select **Sign in → Sign in with Google** to create an account or sign in with Google. To use an email and password, select **Create account** and verify your email. You can reopen your groups from **Account**. Group edits save to Firestore under the verified owner's account. Viewers can still open an invite and unlock the encrypted records with the shared group password.
 
 Choose **Forgot password?** to send a reset link to your account email. Firebase project admins can also send a reset from the Authentication users page. To show **Account recovery** in Tally, add the Firestore document `accountAdmins/<Firebase Auth user UID>` with `enabled` set to boolean `true` as a Firebase project admin.
 
-For deployment, enable **Email/Password** in Firebase Authentication, add the deployed host under **Authorised domains**, and create a Firestore database in Native mode. From this checkout, run `firebase deploy --only firestore:rules,firestore:indexes --project <project-id>`. Set the four public Firebase web values from [.env.example](.env.example) as GitHub Actions repository variables and run the Pages workflow. For local development, use `.env.local`.
+For deployment, enable **Email/Password** and **Google** in Firebase Authentication, add the deployed host under **Authorised domains**, and create a Firestore database in Native mode. From this checkout, run `firebase deploy --only firestore:rules,firestore:indexes --project <project-id>`. Set the four public Firebase web values from [.env.example](.env.example) as GitHub Actions repository variables and run the Pages workflow. For local development, use `.env.local` and ensure the local hostname is authorised in Firebase, or use the emulators.
 
 To test the access rules, run `firebase emulators:start --project demo-tally --only auth,firestore` and then `npm run test:firebase`. Set `VITE_FIREBASE_EMULATORS=true` for a local dev server with the emulators.
 
 ## Work on and publish changes
 
-Select **Workspace → Open workspace** to edit a local copy. A group password opens an existing group. GitHub repository permissions control who can publish. **Log out** locks the group and closes the workspace.
+From the home screen, select **Settings → Manage GitHub groups → Open workspace** to edit groups stored in the GitHub repository. Deployments without Firebase accounts show **Workspace** in the header. A group password opens an existing group. GitHub repository permissions control who can publish. **Log out** locks the group and closes the workspace.
 
 1. Open an existing group or choose **New group** and set a unique password of at least 14 characters. Use **Share invite** to copy its link.
 2. Add members and record expenses or reimbursements. Members can use a photo, emoji, or initials. **Cash** and **PayID** are available in both transaction forms. Add a custom method from the same dropdown to reuse it for the group.

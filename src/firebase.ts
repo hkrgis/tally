@@ -67,6 +67,10 @@ export function accountError(error: unknown) {
     case 'auth/wrong-password': return 'Check the email and password and try again.'
     case 'auth/weak-password': return 'Choose a stronger password.'
     case 'auth/operation-not-allowed': return 'Enable Email/Password in Firebase Authentication.'
+    case 'auth/popup-blocked': return 'Allow pop-ups for Tally, then try Google sign-in again.'
+    case 'auth/popup-closed-by-user': return 'Google sign-in was canceled. Try again or sign in with your email.'
+    case 'auth/account-exists-with-different-credential': return 'This email already has an account. Sign in with the original method to open your groups.'
+    case 'auth/unauthorized-domain': return 'This site’s domain must be authorized in Firebase to use Google sign-in.'
     case 'auth/unauthorized-continue-uri': return 'Add this site’s domain to Firebase Authentication’s authorised domains.'
     case 'auth/too-many-requests': return 'Too many attempts. Try again later.'
     case 'auth/network-request-failed': return 'Could not reach Firebase. Check your connection and try again.'
@@ -84,6 +88,20 @@ export async function registerAccount(email: string, password: string) {
 export async function signInAccount(email: string, password: string) {
   const { auth, authApi } = await firebase()
   await authApi.signInWithEmailAndPassword(auth, email, password)
+}
+
+export async function signInWithGoogle() {
+  const { auth, authApi } = await firebase()
+  const provider = new authApi.GoogleAuthProvider()
+  provider.setCustomParameters({ prompt: 'select_account' })
+  try {
+    await authApi.signInWithPopup(auth, provider, authApi.browserPopupRedirectResolver)
+  } catch (error) {
+    if (codeOf(error) === 'auth/operation-not-allowed') {
+      throw new Error('Google sign-in is unavailable. Please sign in with your email.')
+    }
+    throw error
+  }
 }
 
 export async function signOutAccount() {

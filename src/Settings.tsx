@@ -9,14 +9,19 @@ export type Theme = 'system' | 'light' | 'dark'
 type Ledger = ReturnType<typeof useLedger>
 type Run = (work: () => void | Promise<void>) => void
 
-export function Settings({ theme, changeTheme, refresh, busy }: {
-  theme: Theme; changeTheme: (theme: Theme) => void; refresh: () => void; busy: boolean;
+export function Settings({ theme, changeTheme, refresh, busy, manageGitHubGroups }: {
+  theme: Theme; changeTheme: (theme: Theme) => void; refresh: () => void; busy: boolean; manageGitHubGroups?: () => void;
 }) {
   return <div className="settings-stack">
     <label className="field"><span>Theme</span><select value={theme} onChange={event => changeTheme(event.target.value as Theme)}>
       <option value="system">Follow device</option><option value="light">Light</option><option value="dark">Dark</option>
     </select></label>
     <button className="button button-small" onClick={refresh} disabled={busy}><RefreshCw size={16} />Refresh shared data</button>
+    {manageGitHubGroups && <section className="settings-section">
+      <h3>Older groups</h3>
+      <p>Open the editor for groups stored in the GitHub repository.</p>
+      <button className="text-button" onClick={manageGitHubGroups} disabled={busy}><Pencil size={16} />Manage GitHub groups</button>
+    </section>}
   </div>
 }
 
