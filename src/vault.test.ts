@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { type AppData } from './model'
-import { createGroupKey, openGroup, parseDirectory, sealGroup } from './vault'
+import { createGroupKey, inviteCode, openGroup, parseDirectory, sameDirectory, sealGroup } from './vault'
 
 const password = 'sample test phrase only'
 const group = { id: 'book-club', name: 'Book Club', description: 'Private group description', currency: 'AUD', archived: false }
@@ -21,10 +21,11 @@ describe('encrypted group records', () => {
     const key = await createGroupKey(password)
     const entry = await sealGroup(data, key)
     const directory = parseDirectory({ version: 2, groups: [entry] })
+    expect(sameDirectory(directory, { version: 2, groups: [entry] })).toBe(true)
+    expect(sameDirectory(directory, { ...directory, revision: 'unrelated-revision' })).toBe(false)
     const published = JSON.stringify(directory)
     expect(key.key.extractable).toBe(false)
-    expect(published).toContain('Book Club')
-    for (const privateValue of [password, 'Private member', 'Private receipt', 'Private expense', 'receipt.jpg', 'data:image']) {
+    for (const privateValue of ['Book Club', password, 'Private member', 'Private receipt', 'Private expense', 'receipt.jpg', 'data:image']) {
       expect(published).not.toContain(privateValue)
     }
     expect((await openGroup(directory.groups[0], password)).data).toEqual(data)
@@ -35,9 +36,33 @@ describe('encrypted group records', () => {
     const entry = await sealGroup(data, key)
     expect((await sealGroup(data, key)).iv).not.toBe(entry.iv)
     await expect(openGroup(entry, 'a different test password')).rejects.toThrow('Could not unlock')
-    await expect(openGroup({ ...entry, name: 'Changed name' }, password)).rejects.toThrow('Could not unlock')
+    await expect(openGroup({ ...entry, id: 'other-id' }, password)).rejects.toThrow('Could not unlock')
     expect(() => parseDirectory({ version: 2, groups: [entry, entry] })).toThrow('duplicate')
     expect(() => parseDirectory({ version: 2, groups: [{ ...entry, data }] })).toThrow()
+  })
+
+  it('unlocks older envelopes and saves them without their original public name', async () => {
+    const { key, salt } = await createGroupKey(password)
+    const encode = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes))
+    const utf8 = new TextEncoder()
+    const iv = crypto.getRandomValues(new Uint8Array(12))
+    const { id, name, archived } = group
+    const ciphertext = await crypto.subtle.encrypt({
+      name: 'AES-GCM', iv, additionalData: utf8.encode(JSON.stringify([2, id, name, archived, salt])),
+    }, key, utf8.encode(JSON.stringify(data)))
+    const legacy = { id, name, archived, salt, iv: encode(iv), ciphertext: encode(new Uint8Array(ciphertext)) }
+    const entry = parseDirectory({ version: 2, groups: [legacy] }).groups[0]
+    const opened = await openGroup(entry, password)
+    const saved = await sealGroup(opened.data, opened)
+    expect(saved).not.toHaveProperty('name')
+    expect(saved).not.toHaveProperty('archived')
+    expect((await openGroup(saved, password)).data).toEqual(data)
+  })
+
+  it('accepts invite links and codes without converting them to external requests', () => {
+    expect(inviteCode('book-club')).toBe('book-club')
+    expect(inviteCode('https://example.com/tally/?group=book-club#expenses')).toBe('book-club')
+    expect(inviteCode('https://example.com/tally/?group=%2Fother')).toBe('')
   })
 
   it('protects the new version with a new password after rotation', async () => {

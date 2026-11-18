@@ -1,11 +1,11 @@
 import { useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { Camera, Plus, Trash2, X } from 'lucide-react'
-import { categories, currencies, frequencies, maxExpensePhotos, nextSessionDate, splitMethods, today, type AppData, type Expense, type ExpensePhoto, type Group, type Member, type Payment, type SportsSession } from './model'
+import { categories, currencies, frequencies, groupPaymentMethods, isProfileEmoji, maxExpensePhotos, nextSessionDate, splitMethods, today, type AppData, type Expense, type ExpensePhoto, type Group, type Member, type MemberAvatar, type Payment, type SportsSession } from './model'
 import { calculateBalances, decimal, minorDigits, money, parseUnits, type PairBalance } from './money'
 import { methodLabels } from './screens'
-import { formatDay } from './ui'
+import { Avatar, formatDay } from './ui'
 import { errorText } from './useLedger'
-import { photoTypes, preparePhoto } from './photos'
+import { photoTypes, preparePhoto, prepareProfilePhoto } from './photos'
 import { maxPasswordLength, minPasswordLength } from './vault'
 
 type Field = { label: string; children: ReactNode }
@@ -15,7 +15,7 @@ function Field({ label, children }: Field) {
 
 type EditAction = () => void | Promise<void>
 
-function RecordForm({ children, submit, submitLabel = 'Save to draft', remove, blocked }: {
+function RecordForm({ children, submit, submitLabel = 'Apply changes', remove, blocked }: {
   children: ReactNode; submit: EditAction; submitLabel?: string; remove?: EditAction; blocked?: boolean;
 }) {
   const [error, setError] = useState('')
@@ -61,6 +61,23 @@ const choose = (choices: Choice, id: string, selected: boolean, value: string) =
 }
 const selected = (choices: Choice, id: string) => Object.hasOwn(choices, id)
 
+function PaymentMethodField({ group, value, setValue }: { group: Group; value: string; setValue: (value: string) => void }) {
+  const [adding, setAdding] = useState(false)
+  return <>
+    <Field label="Payment method"><select value={adding ? 'add' : `method:${value}`} onChange={event => {
+      const next = event.target.value
+      setAdding(next === 'add')
+      setValue(next === 'add' ? '' : next.slice(7))
+    }}>
+      <option value="method:">Unspecified</option>
+      {groupPaymentMethods(group).map(method => <option value={`method:${method}`} key={method}>{method}</option>)}
+      <option value="add">Add a method…</option>
+    </select></Field>
+    {adding && <Field label="New payment method"><input required value={value} maxLength={30} pattern=".*\S.*"
+      placeholder="e.g. Bank transfer" onChange={event => setValue(event.target.value)} /></Field>}
+  </>
+}
+
 export function ExpenseForm({ group, members, memberId, expense, session, occurrenceDate, save, remove }: RecordContext & {
   memberId: string; expense?: Expense; session?: SportsSession; occurrenceDate?: string;
   save: (expense: Expense) => void | Promise<void>; remove?: EditAction;
@@ -76,6 +93,7 @@ export function ExpenseForm({ group, members, memberId, expense, session, occurr
   const [date, setDate] = useState(expense?.date ?? occurrenceDate ?? today())
   const [category, setCategory] = useState<Expense['category']>(expense?.category ?? (session ? 'Sports' : 'Other'))
   const [notes, setNotes] = useState(expense?.notes ?? '')
+  const [paymentMethod, setPaymentMethod] = useState(expense?.paymentMethod ?? '')
   const [photos, setPhotos] = useState<ExpensePhoto[]>(expense?.photos ?? [])
   const [preparing, setPreparing] = useState(false)
   const [photoError, setPhotoError] = useState('')
@@ -92,7 +110,9 @@ export function ExpenseForm({ group, members, memberId, expense, session, occurr
   const available = members.filter(member => member.active || selected(payers, member.id) || selected(participants, member.id) ||
     expense?.payers.some(payer => payer.memberId === member.id) || expense?.split.participants.some(person => person.memberId === member.id))
   const payerCount = Object.keys(payers).length
+  const participantCount = Object.keys(participants).length
   const splitLabel = method === 'percentage' ? 'Percentage' : method === 'exact' ? 'Share amount' : 'Weight'
+  const initialShare = method === 'weighted' || method === 'equal' ? '1' : ''
 
   function submit() {
     const total = parseUnits(amount, moneyDigits)
@@ -110,7 +130,7 @@ export function ExpenseForm({ group, members, memberId, expense, session, occurr
     if (method === 'exact' && shares.reduce((sum, share) => sum + share.amount, 0) !== total) throw new Error('Share amounts must add up to the total.')
     if (method === 'weighted' && shares.some(share => !share.amount)) throw new Error('Each selected participant needs at least one share.')
     return save({ id: expense?.id ?? crypto.randomUUID(), groupId: group.id, description, amount: total, date, category, notes,
-      photos: photos.length ? photos : undefined,
+      photos: photos.length ? photos : undefined, paymentMethod: paymentMethod.trim() || undefined,
       payers: expensesPayers, split: { method, participants: shares }, sessionId: expense?.sessionId ?? session?.id })
   }
   async function attach(files: File[]) {
@@ -137,6 +157,7 @@ export function ExpenseForm({ group, members, memberId, expense, session, occurr
     <Field label="Category"><select value={category} onChange={event => setCategory(event.target.value as Expense['category'])}>
       {categories.map(value => <option key={value}>{value}</option>)}
     </select></Field>
+    <PaymentMethodField group={group} value={paymentMethod} setValue={setPaymentMethod} />
     <fieldset className="choice-group">
       <legend>Paid by</legend>
       {available.map(member => <div className="choice-row" key={member.id}>
@@ -155,9 +176,18 @@ export function ExpenseForm({ group, members, memberId, expense, session, occurr
     </select></Field>
     <fieldset className="choice-group">
       <legend>{session ? 'Attendees' : 'Participants'}</legend>
+      {available.length > 1 && <div className="choice-toolbar">
+        <small>{participantCount} of {available.length} selected</small>
+        <div className="inline-actions">
+          <button type="button" className="text-button" disabled={participantCount === available.length} onClick={() => {
+            setParticipants(Object.fromEntries(available.map(member => [member.id, selected(participants, member.id) ? participants[member.id] : initialShare])))
+          }}>Select all</button>
+          <button type="button" className="text-button" disabled={!participantCount} onClick={() => setParticipants({})}>Clear all</button>
+        </div>
+      </div>}
       {available.map(member => <div className="choice-row" key={member.id}>
         <label><input type="checkbox" checked={selected(participants, member.id)}
-          onChange={event => setParticipants(choose(participants, member.id, event.target.checked, method === 'weighted' || method === 'equal' ? '1' : ''))} />
+          onChange={event => setParticipants(choose(participants, member.id, event.target.checked, initialShare))} />
           {member.name}{!member.active && ' (inactive)'}</label>
         {selected(participants, member.id) && method !== 'equal' && <input required inputMode={method === 'weighted' ? 'numeric' : 'decimal'}
           aria-label={`${splitLabel} for ${member.name}`} value={participants[member.id]}
@@ -194,6 +224,7 @@ export function PaymentForm({ group, members, expenses, payments, pair, payment,
   const [to, setTo] = useState(payment?.to ?? pair?.to ?? '')
   const [date, setDate] = useState(payment?.date ?? today())
   const [notes, setNotes] = useState(payment?.notes ?? '')
+  const [paymentMethod, setPaymentMethod] = useState(payment?.paymentMethod ?? '')
   const [amount, setAmount] = useState(payment ? decimal(payment.amount, group.currency) : pair ? decimal(pair.outstanding, group.currency) : '')
   const pairs = calculateBalances(expenses, payments.filter(value => value.id !== payment?.id))
   const outstanding = pairs.find(value => value.from === from && value.to === to)?.outstanding ?? 0
@@ -202,7 +233,8 @@ export function PaymentForm({ group, members, expenses, payments, pair, payment,
     const total = parseUnits(amount, minorDigits(group.currency))
     if (!from || !to || from === to) throw new Error('Select different members for the payer and recipient.')
     if (!total || total > ceiling) throw new Error(`Enter a payment greater than zero and up to ${money(ceiling, group.currency)}.`)
-    return save({ id: payment?.id ?? crypto.randomUUID(), groupId: group.id, from, to, amount: total, date, notes })
+    return save({ id: payment?.id ?? crypto.randomUUID(), groupId: group.id, from, to, amount: total, date, notes,
+      paymentMethod: paymentMethod.trim() || undefined })
   }
   return <RecordForm submit={submit} remove={remove}>
     <div className="form-grid">
@@ -218,6 +250,7 @@ export function PaymentForm({ group, members, expenses, payments, pair, payment,
       <Field label={`Amount (${group.currency})`}><input required value={amount} inputMode="decimal" onChange={event => setAmount(event.target.value)} /></Field>
       <Field label="Date"><input required type="date" value={date} onChange={event => setDate(event.target.value)} /></Field>
     </div>
+    <PaymentMethodField group={group} value={paymentMethod} setValue={setPaymentMethod} />
     <Field label="Notes (optional)"><textarea rows={2} maxLength={1000} value={notes} onChange={event => setNotes(event.target.value)} /></Field>
   </RecordForm>
 }
@@ -234,10 +267,9 @@ export function GroupForm({ group, currencyLocked, save }: { group?: Group; curr
   return <RecordForm submit={() => {
     const access = password.current?.value ?? ''
     if (access !== (confirmPassword.current?.value ?? '')) throw new Error('The passwords do not match.')
-    return save({ id: group?.id ?? crypto.randomUUID(), name, description, currency, archived }, access)
+    return save({ ...group, id: group?.id ?? crypto.randomUUID(), name, description, currency, archived }, access)
   }}>
     <Field label="Group name"><input required maxLength={100} value={name} onChange={event => setName(event.target.value)} /></Field>
-    <p className="muted">The group name appears in the public group list.</p>
     <Field label="Description (optional)"><textarea rows={2} maxLength={240} value={description} onChange={event => setDescription(event.target.value)} /></Field>
     <Field label="Currency"><select disabled={currencyLocked} value={currency} onChange={event => setCurrency(event.target.value)}>
       {currencies.map(value => <option key={value} value={value}>{value} · {names.of(value)}</option>)}
@@ -257,8 +289,43 @@ export function GroupForm({ group, currencyLocked, save }: { group?: Group; curr
 export function MemberForm({ group, member, save }: { group: Group; member?: Member; save: (member: Member) => void | Promise<void> }) {
   const [name, setName] = useState(member?.name ?? '')
   const [active, setActive] = useState(member?.active ?? true)
-  return <RecordForm submit={() => save({ id: member?.id ?? crypto.randomUUID(), groupId: group.id, name, active })}>
+  const [avatar, setAvatar] = useState<MemberAvatar | undefined>(member?.avatar)
+  const [preparing, setPreparing] = useState(false)
+  const [error, setError] = useState('')
+  const photo = useRef<HTMLInputElement>(null)
+  const id = member?.id ?? ''
+  const candidate = { id, groupId: group.id, name: name.trim() || 'Member', active, avatar }
+  async function attach(file: File) {
+    setPreparing(true)
+    setError('')
+    try { setAvatar(await prepareProfilePhoto(file)) } catch (issue) { setError(errorText(issue)) }
+    finally { setPreparing(false) }
+  }
+  return <RecordForm blocked={preparing} submit={() => {
+    if (avatar?.kind === 'emoji' && !isProfileEmoji(avatar.value)) throw new Error('Enter one emoji.')
+    return save({ ...candidate, id: member?.id ?? crypto.randomUUID(), name })
+  }}>
     <Field label="Name"><input required maxLength={100} value={name} onChange={event => setName(event.target.value)} /></Field>
+    <fieldset className="choice-group profile-field">
+      <legend>Profile picture</legend>
+      <div className="profile-preview">
+        <Avatar member={candidate} />
+        <div className="inline-actions">
+          <button type="button" className="button button-small" onClick={() => photo.current?.click()} disabled={preparing}>
+            <Camera size={16} />{preparing ? 'Preparing…' : 'Upload photo'}
+          </button>
+          {avatar && <button type="button" className="text-button" disabled={preparing} onClick={() => { setAvatar(undefined); setError('') }}>Use initials</button>}
+        </div>
+      </div>
+      <input ref={photo} type="file" hidden accept={photoTypes.join(',')} aria-label="Choose profile photo" onChange={event => {
+        const file = event.target.files?.[0]
+        event.target.value = ''
+        if (file) void attach(file)
+      }} />
+      <Field label="Or use an emoji"><input maxLength={40} value={avatar?.kind === 'emoji' ? avatar.value : ''} placeholder="e.g. 🏓"
+        disabled={preparing} onChange={event => setAvatar(event.target.value ? { kind: 'emoji', value: event.target.value.trim() } : undefined)} /></Field>
+      {error && <p className="notice danger" role="alert">{error}</p>}
+    </fieldset>
     {member && <label className="check-line"><input type="checkbox" checked={active} onChange={event => setActive(event.target.checked)} />Available for new expenses</label>}
   </RecordForm>
 }

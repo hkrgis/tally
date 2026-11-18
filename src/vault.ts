@@ -6,16 +6,19 @@ const decoder = new TextDecoder('utf-8', { fatal: true })
 const iterations = 600_000
 export const minPasswordLength = 14
 export const maxPasswordLength = 128
-const id = z.string().check(z.regex(/^[a-zA-Z0-9][\w-]{0,79}$/))
+const idPattern = /^[a-zA-Z0-9][\w-]{0,79}$/
+const id = z.string().check(z.regex(idPattern))
 const base64 = /^[A-Za-z0-9+/]+={0,2}$/
-const groupEntry = z.strictObject({
+const envelope = {
   id,
-  name: z.string().check(z.minLength(1), z.maxLength(100)),
-  archived: z.boolean(),
   salt: z.string().check(z.length(24), z.regex(base64)),
   iv: z.string().check(z.length(16), z.regex(base64)),
   ciphertext: z.string().check(z.minLength(24), z.regex(base64)),
-})
+}
+const groupEntry = z.union([
+  z.strictObject({ ...envelope, format: z.literal(3) }),
+  z.strictObject({ ...envelope, name: z.string().check(z.minLength(1), z.maxLength(100)), archived: z.boolean() }),
+])
 const directorySchema = z.strictObject({
   version: z.literal(2),
   groups: z.array(groupEntry),
@@ -68,24 +71,36 @@ export async function createGroupKey(password: string): Promise<GroupKey> {
   return { salt, key: await deriveKey(password, salt) }
 }
 
-function header(group: Pick<Group, 'id' | 'name' | 'archived'>) {
-  return { id: group.id, name: group.name, archived: group.archived }
+export function inviteCode(value: string) {
+  const entered = value.trim()
+  if (idPattern.test(entered)) return entered
+  try {
+    const code = new URL(entered).searchParams.get('group') ?? ''
+    return idPattern.test(code) ? code : ''
+  } catch {
+    return ''
+  }
 }
 
-function additionalData(group: Pick<GroupEntry, 'id' | 'name' | 'archived' | 'salt'>) {
-  return encoder.encode(JSON.stringify([2, group.id, group.name, group.archived, group.salt]))
+type GroupHeader = (Pick<Group, 'id' | 'name' | 'archived'> | { id: string; format: 3 }) & { salt: string }
+
+function additionalData(group: GroupHeader) {
+  return encoder.encode(JSON.stringify('format' in group
+    ? [group.format, group.id, group.salt]
+    : [2, group.id, group.name, group.archived, group.salt]))
 }
 
-function checkGroup(data: AppData, entry: Pick<GroupEntry, 'id' | 'name' | 'archived'>) {
+function checkGroup(data: AppData, entry: GroupHeader) {
   const group = data.groups[0]
-  if (data.groups.length !== 1 || group.id !== entry.id || group.name !== entry.name || group.archived !== entry.archived) {
+  if (data.groups.length !== 1 || group.id !== entry.id ||
+      ('name' in entry && (group.name !== entry.name || group.archived !== entry.archived))) {
     throw new Error('The encrypted records do not match this group.')
   }
 }
 
 export async function sealGroup(data: AppData, { key, salt }: GroupKey): Promise<GroupEntry> {
   if (data.groups.length !== 1) throw new Error('Select a single group to save.')
-  const entry = { ...header(data.groups[0]), salt }
+  const entry = { id: data.groups[0].id, format: 3 as const, salt }
   const iv = webCrypto().getRandomValues(new Uint8Array(12))
   const encrypted = await webCrypto().subtle.encrypt({ name: 'AES-GCM', iv, additionalData: additionalData(entry) }, key,
     encoder.encode(JSON.stringify(data)))
@@ -108,6 +123,13 @@ export async function openGroup(entry: GroupEntry, password: string) {
 }
 
 export function sameEntry(left: GroupEntry | undefined, right: GroupEntry) {
-  return left?.id === right.id && left.name === right.name && left.archived === right.archived &&
-    left.salt === right.salt && left.iv === right.iv && left.ciphertext === right.ciphertext
+  if (!left || left.id !== right.id || left.salt !== right.salt || left.iv !== right.iv || left.ciphertext !== right.ciphertext) return false
+  if ('format' in left) return 'format' in right && left.format === right.format
+  return 'name' in right && left.name === right.name && left.archived === right.archived
+}
+
+export function sameDirectory(left: Directory, right: Directory) {
+  if (left.revision !== right.revision || left.groups.length !== right.groups.length) return false
+  const entries = new Map(left.groups.map(entry => [entry.id, entry]))
+  return right.groups.every(entry => sameEntry(entries.get(entry.id), entry))
 }

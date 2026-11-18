@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { ArrowDown, ArrowRight, ArrowUpRight, CalendarDays, Camera, ChevronDown, Download, ListFilter, Pencil, Plus, ReceiptText, Search, Wallet } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { ArrowRight, ArrowUpRight, CalendarDays, Camera, ChevronDown, ChevronRight, Download, ListFilter, Pencil, Plus, Search } from 'lucide-react'
 import { categories, type Activity, type Expense, type Member, type Payment } from './model'
 import { decimal, expenseCharges, memberBalance, money, splitExpense, type PairBalance } from './money'
 import { download, toCsv } from './storage'
@@ -21,17 +21,18 @@ function ExpenseBreakdown({ expense, currency, nameOf }: Common & { expense: Exp
   const charges = expenseCharges(expense)
   return <>
     <div className="breakdown-grid">
-      <div><h4>Paid by</h4>{expense.payers.map(payer => <div className="line" key={payer.memberId}><span>{nameOf(payer.memberId)}</span><strong>{money(payer.amount, currency)}</strong></div>)}</div>
+      <div><h4>Paid by{expense.paymentMethod && ` · ${expense.paymentMethod}`}</h4>{expense.payers.map(payer => <div className="line" key={payer.memberId}><span>{nameOf(payer.memberId)}</span><strong>{money(payer.amount, currency)}</strong></div>)}</div>
       <div><h4>Split · {methodLabels[expense.split.method]}</h4>{splitExpense(expense).map((share, index) => {
         const value = expense.split.participants[index].amount
         const rule = expense.split.method === 'percentage' ? ` (${value / 100}%)` : expense.split.method === 'weighted' ? ` (${value} shares)` : ''
         return <div className="line" key={share.memberId}><span>{nameOf(share.memberId)}{rule}</span><strong>{money(share.amount, currency)}</strong></div>
       })}</div>
+      <div><h4>Original debts</h4>
+        {charges.length ? charges.map(charge => <div className="line" key={`${charge.from}:${charge.to}`}>
+          <span>{nameOf(charge.from)} <span aria-label="owes">→</span> {nameOf(charge.to)}</span><strong>{money(charge.amount, currency)}</strong>
+        </div>) : <p className="muted">Everyone covered their own share.</p>}
+      </div>
     </div>
-    <h4>Original debts</h4>
-    {charges.length ? charges.map(charge => <div className="line" key={`${charge.from}:${charge.to}`}>
-      <span>{nameOf(charge.from)} <span aria-label="owes">→</span> {nameOf(charge.to)}</span><strong>{money(charge.amount, currency)}</strong>
-    </div>) : <p className="muted">Everyone covered their own share.</p>}
     {expense.notes && <div><h4>Notes</h4><p className="record-note">{expense.notes}</p></div>}
     {Boolean(expense.photos?.length) && <div>
       <h4>Photos and receipts</h4>
@@ -43,22 +44,29 @@ function ExpenseBreakdown({ expense, currency, nameOf }: Common & { expense: Exp
   </>
 }
 
-export function TransactionRow({ item, currency, nameOf, canEdit, editExpense, editPayment, showDate, memberId }: Omit<LedgerRows, 'expenses' | 'payments'> & {
-  item: Transaction; showDate?: boolean; memberId?: string;
+export function TransactionRow({ item, currency, nameOf, canEdit, editExpense, editPayment, memberId, initiallyOpen }: Omit<LedgerRows, 'expenses' | 'payments'> & {
+  item: Transaction; memberId?: string; initiallyOpen?: boolean;
 }) {
+  const disclosure = useRef<HTMLDetailsElement>(null)
+  useEffect(() => {
+    if (!initiallyOpen) return
+    const summary = disclosure.current?.querySelector<HTMLElement>('summary')
+    summary?.focus({ preventScroll: true })
+    summary?.scrollIntoView({ block: 'nearest' })
+  }, [initiallyOpen])
   if (item.type === 'payment') {
     const payment = item.data
-    return <details className="transaction">
+    return <details className="transaction" ref={disclosure} open={initiallyOpen}>
       <summary>
         <PaymentIcon />
         <span className="transaction-text"><strong>Reimbursement</strong>
-          <small>{nameOf(payment.from)} <span aria-label="paid">→</span> {nameOf(payment.to)}{showDate && <> <span className="middot">·</span> {formatDay(payment.date)}</>}</small>
+          <small>{nameOf(payment.from)} <span aria-label="paid">→</span> {nameOf(payment.to)}{payment.paymentMethod && ` · ${payment.paymentMethod}`}</small>
         </span>
         <span className="transaction-amount">{money(payment.amount, currency)}</span>
         <ChevronDown size={16} className="chevron" aria-hidden="true" />
       </summary>
       <div className="breakdown">
-        <p>{nameOf(payment.from)} paid {nameOf(payment.to)} on {formatDay(payment.date, true)}.</p>
+        <p>{nameOf(payment.from)} paid {nameOf(payment.to)} on {formatDay(payment.date, true)}{payment.paymentMethod ? ` via ${payment.paymentMethod}` : ''}.</p>
         {payment.notes && <p className="record-note">{payment.notes}</p>}
         {canEdit && <button className="button button-small" onClick={() => editPayment(payment)}><Pencil size={15} />Edit payment</button>}
       </div>
@@ -67,16 +75,17 @@ export function TransactionRow({ item, currency, nameOf, canEdit, editExpense, e
   const expense = item.data
   const payers = expense.payers.map(payer => nameOf(payer.memberId)).join(', ')
   const personalShare = memberId ? splitExpense(expense).find(share => share.memberId === memberId) : undefined
-  return <details className="transaction">
+  return <details className="transaction" ref={disclosure} open={initiallyOpen}>
     <summary>
       <CategoryIcon category={expense.category} />
       <span className="transaction-text"><strong>{expense.description}</strong>
-        <small><span className="payer-line">{payers} paid</span><span className="middot">·</span>{showDate ? formatDay(expense.date) : `${expense.split.participants.length} ${expense.split.participants.length === 1 ? 'share' : 'shares'}`}
+        <small><span className="payer-line">{payers} paid</span><span className="middot">·</span>{expense.paymentMethod ??
+          `${expense.split.participants.length} ${expense.split.participants.length === 1 ? 'share' : 'shares'}`}
           {Boolean(expense.photos?.length) && <span className="photo-counter" aria-label={`${expense.photos?.length} attached photos`}><Camera size={13} aria-hidden="true" />{expense.photos?.length}</span>}
         </small>
       </span>
       <span className="transaction-amount">{money(expense.amount, currency)}
-        {personalShare && !showDate && <small>Your share {money(personalShare.amount, currency)}</small>}
+        {personalShare && <small>Your share {money(personalShare.amount, currency)}</small>}
       </span>
       <ChevronDown size={16} className="chevron" aria-hidden="true" />
     </summary>
@@ -87,16 +96,19 @@ export function TransactionRow({ item, currency, nameOf, canEdit, editExpense, e
   </details>
 }
 
-export function Overview({ currency, pairs, members, memberId, selectMember, openExpenses, openSessions, ...ledger }: LedgerRows & {
+export function Overview({ currency, pairs, members, memberId, selectMember, openExpenses, openSessions, openTransaction, events, ...ledger }: Common & {
+  expenses: Expense[]; payments: Payment[]; events: Activity[];
   pairs: PairBalance[]; members: Member[]; memberId: string; selectMember: (id: string) => void;
-  openExpenses: () => void; openSessions: () => void;
+  openExpenses: () => void; openSessions?: () => void; openTransaction: (id: string) => void;
 }) {
   const { owes, owed, net } = memberBalance(pairs, memberId)
-  const recent = transactions(ledger.expenses, ledger.payments).slice(0, 5)
+  const created = new Map(events.filter(event => event.action === 'created').map(event => [`${event.entity}:${event.entityId}`, event.at]))
+  const recent = transactions(ledger.expenses, ledger.payments).sort((a, b) => b.data.date.localeCompare(a.data.date) ||
+    (created.get(`${b.type}:${b.data.id}`) ?? '').localeCompare(created.get(`${a.type}:${a.data.id}`) ?? '')).slice(0, 5)
   return <>
     <section className="summary-panel" aria-labelledby="summary-title">
       <div className="summary-heading">
-        <div className="summary-title"><Wallet size={17} aria-hidden="true" /><h2 id="summary-title">Your balance</h2></div>
+        <div className="summary-title"><h2 id="summary-title">Your balance</h2></div>
         {members.length > 0 && <label className="identity">
           <span>Viewing as</span>
           <select aria-label="Viewing as" value={memberId} onChange={event => selectMember(event.target.value)}>
@@ -114,29 +126,35 @@ export function Overview({ currency, pairs, members, memberId, selectMember, ope
       <header className="section-heading"><h2 id="recent-title">Recent transactions</h2>
         <button className="text-button" onClick={openExpenses}>All expenses <ArrowRight size={16} /></button>
       </header>
-      {recent.length ? <div className="list-surface">{recent.map(item =>
-        <TransactionRow key={`${item.type}:${item.data.id}`} item={item} currency={currency} {...ledger} showDate />)}</div>
-        : <Empty title="No transactions yet">Expenses and reimbursements for this group will appear here.</Empty>}
+      {recent.length ? <ul className="recent-list">{recent.map(item => {
+        const id = `${item.type}:${item.data.id}`
+        const title = item.type === 'expense' ? item.data.description : `${ledger.nameOf(item.data.from)} → ${ledger.nameOf(item.data.to)}`
+        const subtitle = item.type === 'expense' ? item.data.payers.map(payer => ledger.nameOf(payer.memberId)).join(', ') : 'Reimbursement'
+        return <li key={id}><button className="recent-row" onClick={() => openTransaction(id)}>
+          {item.type === 'expense' ? <CategoryIcon category={item.data.category} /> : <PaymentIcon />}
+          <span className="transaction-text"><strong>{title}</strong>
+            <small>{subtitle} · {formatDay(item.data.date)}{item.data.paymentMethod && ` · ${item.data.paymentMethod}`}</small>
+          </span>
+          <strong className="transaction-amount">{money(item.data.amount, currency)}</strong>
+          <ChevronRight className="chevron" size={15} aria-hidden="true" />
+        </button></li>
+      })}</ul> : <p className="muted compact-empty">No transactions yet.</p>}
     </section>
-    <button className="session-link" onClick={openSessions}>
-      <span className="tile tone-green"><CalendarDays size={19} aria-hidden="true" /></span>
-      <span><strong>Sports sessions</strong><small>Manage recurring court bookings and attendance.</small></span>
-      <ArrowRight size={17} aria-hidden="true" />
-    </button>
+    {openSessions && <button className="text-button session-shortcut" onClick={openSessions}><CalendarDays size={17} />Sports sessions <ArrowRight size={15} /></button>}
   </>
 }
 
-export function Expenses({ memberId, ...ledger }: LedgerRows & { memberId: string }) {
+export function Expenses({ memberId, canExport, focusTransaction, ...ledger }: LedgerRows & { memberId: string; canExport: boolean; focusTransaction?: string }) {
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('')
   const [kind, setKind] = useState('all')
   const { expenses, payments, currency, nameOf } = ledger
   const query = search.trim().toLowerCase()
   const matched = transactions(kind === 'payment' ? [] : expenses, category || kind === 'expense' ? [] : payments).filter(item => {
-    if (item.type === 'payment') return `reimbursement ${nameOf(item.data.from)} ${nameOf(item.data.to)} ${item.data.notes}`.toLowerCase().includes(query)
+    if (item.type === 'payment') return `reimbursement ${nameOf(item.data.from)} ${nameOf(item.data.to)} ${item.data.paymentMethod ?? ''} ${item.data.notes}`.toLowerCase().includes(query)
     const expense = item.data
     return (!category || expense.category === category) &&
-      [expense.description, expense.category, expense.notes, ...expense.payers.map(payer => nameOf(payer.memberId)),
+      [expense.description, expense.category, expense.paymentMethod, expense.notes, ...expense.payers.map(payer => nameOf(payer.memberId)),
         ...expense.split.participants.map(participant => nameOf(participant.memberId))].join(' ').toLowerCase().includes(query)
   })
   const groups = new Map<string, Transaction[]>()
@@ -156,14 +174,14 @@ export function Expenses({ memberId, ...ledger }: LedgerRows & { memberId: strin
       ? ['Expense', item.data.date, item.data.description, item.data.category,
         item.data.payers.map(payer => `${nameOf(payer.memberId)} ${decimal(payer.amount, currency)}`).join(', '),
         splitExpense(item.data).map(share => `${nameOf(share.memberId)} ${decimal(share.amount, currency)}`).join(', '),
-        Number(decimal(item.data.amount, currency)), currency, item.data.notes]
+        Number(decimal(item.data.amount, currency)), currency, item.data.paymentMethod ?? '', item.data.notes]
       : ['Payment', item.data.date, 'Reimbursement', '', nameOf(item.data.from), nameOf(item.data.to),
-        Number(decimal(item.data.amount, currency)), currency, item.data.notes])
-    download('tally-transactions.csv', toCsv([['Type', 'Date', 'Description', 'Category', 'Paid by', 'Shares or recipient', 'Amount', 'Currency', 'Notes'], ...rows]), 'text/csv;charset=utf-8')
+        Number(decimal(item.data.amount, currency)), currency, item.data.paymentMethod ?? '', item.data.notes])
+    download('tally-transactions.csv', toCsv([['Type', 'Date', 'Description', 'Category', 'Paid by', 'Shares or recipient', 'Amount', 'Currency', 'Payment method', 'Notes'], ...rows]), 'text/csv;charset=utf-8')
   }
   return <section aria-labelledby="expenses-title">
     <header className="section-heading page-section-heading"><h2 id="expenses-title">Expenses</h2>
-      <button className="button button-small" onClick={exportCsv} disabled={!matched.length}><Download size={16} />Export CSV</button>
+      {canExport && <button className="button button-small" onClick={exportCsv} disabled={!matched.length}><Download size={16} />Export CSV</button>}
     </header>
     <div className="filters">
       <label className="search-field"><Search size={18} aria-hidden="true" /><input type="search" placeholder="Search transactions" aria-label="Search transactions" value={search} onChange={event => setSearch(event.target.value)} /></label>
@@ -182,7 +200,8 @@ export function Expenses({ memberId, ...ledger }: LedgerRows & { memberId: strin
     {[...groups].map(([date, items]) => <section className="date-group" key={date}>
       <h3><time dateTime={date}>{formatDay(date, true)}</time></h3>
       <div className="list-surface">{items.map(item =>
-        <TransactionRow key={`${item.type}:${item.data.id}`} item={item} memberId={memberId} {...ledger} />)}</div>
+        <TransactionRow key={`${item.type}:${item.data.id}`} item={item} memberId={memberId}
+          initiallyOpen={focusTransaction === `${item.type}:${item.data.id}` || undefined} {...ledger} />)}</div>
     </section>)}
     {matched.length === 0 && <Empty title={search || category || kind !== 'all' ? 'No matching transactions' : 'No transactions yet'}>
       {search || category || kind !== 'all' ? 'Try another search or clear the filters.' : 'Group expenses and payments will appear here.'}
@@ -219,7 +238,8 @@ export function Balances({ pairs, currency, nameOf, canEdit, settle, editPayment
           </div>)}
           {pair.payments.length > 0 && <h4>Reimbursements</h4>}
           {pair.payments.map(payment => <div className="line" key={payment.id}>
-            <span>{formatDay(payment.date, true)}<small>{payment.notes}{payment.notes && payment.unapplied > 0 && ' · '}{payment.unapplied > 0 && `${money(payment.unapplied, currency)} unapplied`}</small></span>
+            <span>{formatDay(payment.date, true)}{payment.paymentMethod && ` · ${payment.paymentMethod}`}
+              <small>{payment.notes}{payment.notes && payment.unapplied > 0 && ' · '}{payment.unapplied > 0 && `${money(payment.unapplied, currency)} unapplied`}</small></span>
             <span className="inline-actions"><strong>{money(payment.amount, currency)}</strong>{canEdit &&
               <button className="icon-button" aria-label={`Edit payment on ${formatDay(payment.date, true)}`} onClick={() => editPayment(payment)}><Pencil size={16} /></button>}</span>
           </div>)}
@@ -233,11 +253,11 @@ export function Balances({ pairs, currency, nameOf, canEdit, settle, editPayment
 export function ActivityFeed({ events }: { events: Activity[] }) {
   const sorted = [...events].reverse().sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
   return <section aria-labelledby="activity-title">
-    <header className="section-heading page-section-heading"><h2 id="activity-title">Activity</h2><span className="muted inline-actions"><ArrowDown size={16} />Newest first</span></header>
+    <header className="section-heading page-section-heading"><h2 id="activity-title">Activity</h2></header>
     {sorted.length === 0 ? <Empty title="No activity yet">Changes to this group will appear here.</Empty> :
-      <ol className="list-surface activity-list">{sorted.map(event => <li key={event.id}>
-        <span className="tile tone-neutral" aria-hidden="true"><ReceiptText size={17} /></span>
-        <div><strong>{event.title}</strong><p>{event.actor} {event.action} {event.entity === 'expense' ? 'an' : 'a'} {event.entity}</p><time dateTime={event.at}>{formatEventTime(event.at)}</time></div>
+      <ol className="activity-list">{sorted.map(event => <li key={event.id}>
+        <div><strong>{event.title}</strong><p>{event.actor} {event.action} {event.entity === 'expense' ? 'an' : 'a'} {event.entity}</p></div>
+        <time dateTime={event.at}>{formatEventTime(event.at)}</time>
       </li>)}</ol>}
   </section>
 }

@@ -17,23 +17,43 @@ const notes = z.string().check(z.maxLength(1000))
 const entry = z.object({ memberId: id, amount: positive })
 export const maxExpensePhotos = 3
 export const maxPhotoBytes = 240_000
+export const maxProfilePhotoBytes = 48_000
+export const defaultPaymentMethods = ['Cash', 'PayID'] as const
+const paymentMethod = z.string().check(z.trim(), z.minLength(1), z.maxLength(30))
+const emojiSegmenter = typeof Intl.Segmenter === 'function' ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null
+
+export function isProfileEmoji(value: string) {
+  const single = emojiSegmenter ? [...emojiSegmenter.segment(value)].length === 1 : !/\s/u.test(value) && Array.from(value).length <= 8
+  return value.length <= 40 && single &&
+    (/[\p{Extended_Pictographic}\p{Regional_Indicator}]/u.test(value) || /\u20e3/u.test(value))
+}
+
+function imageSource(maxBytes: number) {
+  return z.string().check(z.maxLength(23 + 4 * Math.ceil(maxBytes / 3)), z.regex(/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/))
+}
+
 const photoSchema = z.object({
   id,
   name: title,
-  source: z.string().check(z.maxLength(23 + 4 * Math.ceil(maxPhotoBytes / 3)),
-    z.regex(/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/)),
+  source: imageSource(maxPhotoBytes),
 })
+const avatarSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('emoji'), value: z.string().check(z.refine(isProfileEmoji, 'Enter one emoji')) }),
+  z.object({ kind: z.literal('photo'), source: imageSource(maxProfilePhotoBytes) }),
+])
 
 const groupSchema = z.object({
   id, name: title, description: z.string().check(z.maxLength(240)),
   currency: z.string().check(z.refine(value => currencies.includes(value), 'Unsupported currency')),
   archived: z.boolean(),
+  paymentMethods: z.optional(z.array(paymentMethod)),
 })
-const memberSchema = z.object({ id, groupId: id, name: title, active: z.boolean() })
+const memberSchema = z.object({ id, groupId: id, name: title, active: z.boolean(), avatar: z.optional(avatarSchema) })
 const expenseSchema = z.object({
   id, groupId: id, description: title, amount: positive, date: day,
   category: z.enum(categories), notes, payers: z.array(entry).check(z.minLength(1)),
   photos: z.optional(z.array(photoSchema).check(z.maxLength(maxExpensePhotos))),
+  paymentMethod: z.optional(paymentMethod),
   split: z.object({
     method: z.enum(splitMethods),
     participants: z.array(z.object({ memberId: id, amount: minorAmount.check(z.minimum(0)) })).check(z.minLength(1)),
@@ -42,6 +62,7 @@ const expenseSchema = z.object({
 })
 const paymentSchema = z.object({
   id, groupId: id, from: id, to: id, amount: positive, date: day, notes,
+  paymentMethod: z.optional(paymentMethod),
 })
 const sessionSchema = z.object({
   id, groupId: id, name: title, amount: positive, startDate: day, frequency: z.enum(frequencies),
@@ -62,6 +83,7 @@ const documentSchema = z.object({
 export type AppData = z.infer<typeof documentSchema>
 export type Group = z.infer<typeof groupSchema>
 export type Member = z.infer<typeof memberSchema>
+export type MemberAvatar = z.infer<typeof avatarSchema>
 export type Expense = z.infer<typeof expenseSchema>
 export type ExpensePhoto = z.infer<typeof photoSchema>
 export type Payment = z.infer<typeof paymentSchema>
@@ -73,6 +95,21 @@ function unique(values: string[]) {
   return new Set(values).size === values.length
 }
 
+export function groupPaymentMethods(group?: Group) {
+  return [...defaultPaymentMethods, ...(group?.paymentMethods ?? [])]
+}
+
+export function registerPaymentMethod(data: AppData, groupId: string, value?: string) {
+  const name = value?.trim()
+  if (!name) return undefined
+  const group = data.groups.find(record => record.id === groupId)
+  if (!group) throw new Error('This payment method needs a group.')
+  const existing = groupPaymentMethods(group).find(method => method.toLowerCase() === name.toLowerCase())
+  if (existing) return existing
+  group.paymentMethods = [...(group.paymentMethods ?? []), name]
+  return name
+}
+
 export function parseData(input: unknown): AppData {
   const result = documentSchema.safeParse(input)
   if (!result.success) {
@@ -81,6 +118,11 @@ export function parseData(input: unknown): AppData {
   }
   const data = result.data
   const groups = new Set(data.groups.map(group => group.id))
+  const methodsByGroup = new Map(data.groups.map(group => {
+    const methods = groupPaymentMethods(group)
+    if (!unique(methods.map(method => method.toLowerCase()))) throw new Error('Payment method names must be unique within a group.')
+    return [group.id, new Set(methods)]
+  }))
   const members = new Map(data.members.map(member => [member.id, member.groupId]))
   const sessions = new Map(data.sessions.map(session => [session.id, session.groupId]))
   const occurrences = data.expenses.flatMap(expense => expense.sessionId ? [`${expense.sessionId}:${expense.date}`] : [])
@@ -91,6 +133,11 @@ export function parseData(input: unknown): AppData {
     if (records.some(record => 'groupId' in record && !groups.has(record.groupId))) throw new Error('A record refers to an unknown group.')
   }
   const inGroup = (groupId: string, ids: string[]) => ids.every(memberId => members.get(memberId) === groupId)
+  for (const record of [...data.expenses, ...data.payments]) {
+    if (record.paymentMethod && !methodsByGroup.get(record.groupId)?.has(record.paymentMethod)) {
+      throw new Error('Select a payment method that belongs to this group.')
+    }
+  }
   for (const expense of data.expenses) {
     if (expense.photos && !unique(expense.photos.map(photo => photo.id))) throw new Error('Expense photo IDs must be unique.')
     const payerIds = expense.payers.map(payer => payer.memberId)

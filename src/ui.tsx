@@ -25,7 +25,9 @@ export const OwedIcon = () => <ArrowDownLeft size={17} aria-hidden="true" />
 const tones = ['lavender', 'peach', 'green', 'blue', 'neutral']
 export function Avatar({ member, index = 0 }: { member: Member; index?: number }) {
   const initials = member.name.trim().split(/\s+/).slice(0, 2).map(word => Array.from(word)[0]).join('').toUpperCase()
-  return <span className={`avatar tone-${tones[index % tones.length]}`} title={member.name} aria-label={member.name}>{initials}</span>
+  return <span className={`avatar tone-${tones[index % tones.length]}`} title={member.name} aria-hidden="true">
+    {member.avatar?.kind === 'photo' ? <img src={member.avatar.source} alt="" /> : member.avatar?.kind === 'emoji' ? member.avatar.value : initials}
+  </span>
 }
 
 export const formatDay = (day: string, year = false) => new Intl.DateTimeFormat('en-AU', {

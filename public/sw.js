@@ -1,6 +1,6 @@
 const scope = self.registration.scope
 const prefix = `tally:${scope}:`
-const cacheName = `${prefix}v2`
+const cacheName = `${prefix}v3`
 const ledgerUrl = new URL('app.json', scope).href
 const indexUrl = new URL('index.html', scope)
 const entryPaths = [new URL(scope).pathname, indexUrl.pathname]

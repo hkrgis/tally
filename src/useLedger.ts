@@ -1,18 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { parseData, type Activity, type AppData, type Group } from './model'
-import { connectGitHub, readPublished, readRepository, StaleDataError, writeRepository, type GitHubSession } from './storage'
-import { createGroupKey, openGroup, sameEntry, sealGroup, type Directory, type GroupEntry } from './vault'
+import { hasRepository, readPublished, readRepository, serialize, StaleDataError } from './storage'
+import { createGroupKey, openGroup, sameDirectory, sameEntry, sealGroup, type Directory, type GroupEntry } from './vault'
 
 type EventInput = Omit<Activity, 'id' | 'at' | 'actor'>
-type Editor =
-  | { mode: 'manual'; actor: string; data: Directory }
-  | { mode: 'github'; actor: string; data: Directory; sha: string }
+type Editor = { actor: string; data: Directory; sha: string | null }
 type Opened = Awaited<ReturnType<typeof openGroup>>
 
 export const errorText = (error: unknown) => error instanceof Error ? error.message : 'Something went wrong. Try again.'
 
 export function useLedger() {
-  const credentials = useRef<GitHubSession | null>(null)
   const workingLock = useRef(false)
   const refreshSequence = useRef(0)
   const [published, setPublished] = useState<Directory | null>(null)
@@ -21,9 +18,9 @@ export function useLedger() {
   const [loadError, setLoadError] = useState('')
   const [editor, setEditor] = useState<Editor | null>(null)
   const [opened, setOpened] = useState<Opened | null>(null)
+  const [names, setNames] = useState<Record<string, string>>({})
   const [dirty, setDirty] = useState(false)
   const [working, setWorking] = useState(false)
-  const [conflict, setConflict] = useState(false)
   const [publication, setPublication] = useState<string | null>(null)
   const directory = editor?.data ?? published
   const active = opened && sameEntry(directory?.groups.find(group => group.id === opened.entry.id), opened.entry) ? opened : null
@@ -57,33 +54,37 @@ export function useLedger() {
     if (opened && !active) setOpened(null)
   }, [opened, active])
 
-  async function connect(token: string) {
-    const result = await connectGitHub(token)
-    credentials.current = result.session
-    setEditor({ mode: 'github', actor: result.session.actor, ...result.snapshot })
-    setDirty(false)
-    setConflict(false)
+  async function latestSnapshot() {
+    if (hasRepository) return readRepository()
+    if (!published) throw new Error('Load the group data before opening the workspace.')
+    return { data: published, sha: null }
   }
 
-  function beginManual(actor: string) {
-    if (!published) throw new Error('Load the published directory before starting a draft.')
-    if (!actor.trim() || actor.trim().length > 100) throw new Error('Enter a name for the activity log (up to 100 characters).')
-    setEditor({ mode: 'manual', actor: actor.trim(), data: published })
+  async function beginEditing(actor: string) {
+    const name = actor.trim() || 'Organiser'
+    if (name.length > 100) throw new Error('Enter a name of up to 100 characters.')
+    const snapshot = await latestSnapshot()
+    setEditor({ actor: name, ...snapshot })
     setDirty(false)
-    setConflict(false)
   }
 
   function closeEditor() {
-    credentials.current = null
+    setOpened(null)
     setEditor(null)
+    setNames({})
     setDirty(false)
-    setConflict(false)
     void refresh()
   }
 
   async function unlock(entry: GroupEntry, password: string) {
     const record = await openGroup(entry, password)
-    setOpened(record)
+    if (editor && 'name' in entry) {
+      // Older envelopes needed the public name to authenticate decryption.
+      await storeDraft(editor, record.data, record)
+    } else {
+      setOpened(record)
+      if (editor) setNames(current => ({ ...current, [entry.id]: record.data.groups[0].name }))
+    }
   }
 
   function lock() {
@@ -97,8 +98,8 @@ export function useLedger() {
     try { await work() } finally { workingLock.current = false; setWorking(false) }
   }
 
-  async function storeDraft(current: Editor, draft: AppData, info: EventInput, protection: Pick<Opened, 'key' | 'salt'>) {
-    draft.activity.push({ ...info, id: crypto.randomUUID(), at: new Date().toISOString(), actor: current.actor })
+  async function storeDraft(current: Editor, draft: AppData, protection: Pick<Opened, 'key' | 'salt'>, info?: EventInput) {
+    if (info) draft.activity.push({ ...info, id: crypto.randomUUID(), at: new Date().toISOString(), actor: current.actor })
     const data = parseData(draft)
     const entry = await sealGroup(data, protection)
     const groups = current.data.groups.some(group => group.id === entry.id)
@@ -106,61 +107,66 @@ export function useLedger() {
       : [...current.data.groups, entry]
     setEditor({ ...current, data: { version: 2, groups, revision: crypto.randomUUID() } })
     setOpened({ ...protection, data, entry })
+    setNames(previous => ({ ...previous, [entry.id]: data.groups[0].name }))
     setDirty(true)
   }
 
   async function createGroup(group: Group, password: string) {
-    if (!editor) throw new Error('Open the admin editor before creating a group.')
+    if (!editor) throw new Error('Open the workspace before creating a group.')
     await exclusive(async () => {
       const data: AppData = { version: 1, groups: [group], members: [], expenses: [], payments: [], sessions: [], activity: [] }
       const protection = await createGroupKey(password)
-      await storeDraft(editor, data, { entity: 'group', groupId: group.id, entityId: group.id, title: group.name, action: 'created' }, protection)
+      await storeDraft(editor, data, protection, { entity: 'group', groupId: group.id, entityId: group.id, title: group.name, action: 'created' })
     })
   }
 
   async function change(update: (draft: AppData) => void, info: EventInput, password?: string) {
-    if (!editor || !active || info.groupId !== active.entry.id) throw new Error('Unlock the group in the admin editor before changing records.')
+    if (!editor || !active || info.groupId !== active.entry.id) throw new Error('Unlock the group in the workspace before changing records.')
     await exclusive(async () => {
       const draft = structuredClone(active.data)
       update(draft)
       const protection = password ? await createGroupKey(password) : { key: active.key, salt: active.salt }
-      await storeDraft(editor, draft, info, protection)
+      await storeDraft(editor, draft, protection, info)
     })
   }
 
   async function reloadRepository() {
-    const session = credentials.current
-    if (!session) return
-    const latest = await readRepository(session.token)
-    setEditor({ mode: 'github', actor: session.actor, ...latest })
+    if (!editor) return
+    const snapshot = await latestSnapshot()
+    setEditor({ actor: editor.actor, ...snapshot })
     setDirty(false)
-    setConflict(false)
   }
 
-  async function commit() {
-    const session = credentials.current
-    if (!session || editor?.mode !== 'github' || !dirty || conflict) return
-    const revision = editor.data.revision
-    if (!revision) throw new Error('Save an edit before committing the draft.')
-    await exclusive(async () => {
-      try {
-        const saved = await writeRepository(session, editor.sha, editor.data)
-        setEditor({ mode: 'github', actor: session.actor, ...saved })
-        setDirty(false)
-        setPublication(revision)
-        const latest = await readRepository(session.token).catch(() => null)
-        if (latest) setEditor({ mode: 'github', actor: session.actor, ...latest })
-        await refresh(revision)
-      } catch (error) {
-        if (error instanceof StaleDataError) setConflict(true)
-        throw error
-      }
-    })
+  async function confirmSaved() {
+    if (!editor || !hasRepository || !dirty) return false
+    const latest = await readRepository()
+    if (!sameDirectory(latest.data, editor.data)) return false
+    setEditor({ actor: editor.actor, ...latest })
+    setDirty(false)
+    if (latest.data.revision) setPublication(latest.data.revision)
+    await refresh(latest.data.revision)
+    return true
+  }
+
+  async function prepareSave() {
+    if (!editor || !dirty) return null
+    const text = serialize(editor.data)
+    if (!hasRepository) return text
+    const latest = await readRepository()
+    if (latest.sha === editor.sha) return text
+    if (sameDirectory(latest.data, editor.data)) {
+      setEditor({ actor: editor.actor, ...latest })
+      setDirty(false)
+      if (latest.data.revision) setPublication(latest.data.revision)
+      await refresh(latest.data.revision)
+      return null
+    }
+    throw new StaleDataError()
   }
 
   return {
-    data: active?.data ?? null, directory, loading, loadError, offline, refresh,
-    editor, dirty, working, conflict, publication, connect, beginManual, closeEditor, change, commit, reloadRepository,
+    data: active?.data ?? null, directory, names, loading, loadError, offline, refresh,
+    editor, dirty, working, publication, beginEditing, closeEditor, change, prepareSave, confirmSaved, reloadRepository,
     unlock, lock, createGroup,
   }
 }

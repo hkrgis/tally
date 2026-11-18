@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import published from '../public/app.json'
-import { nextSessionDate, parseData, type AppData } from './model'
+import { groupPaymentMethods, isProfileEmoji, nextSessionDate, parseData, registerPaymentMethod, type AppData } from './model'
 import { parseDirectory } from './vault'
 
 const sample: AppData = {
@@ -56,6 +56,21 @@ describe('published ledger validation', () => {
     const booking = copy.expenses.find(expense => expense.sessionId)!
     copy.expenses.push({ ...booking, id: 'duplicate-booking' })
     expect(() => parseData(copy)).toThrow('only be recorded once')
+  })
+  it('reuses default and custom payment methods while accepting older records', () => {
+    const data = parseData(sample)
+    expect(groupPaymentMethods(data.groups[0])).toEqual(['Cash', 'PayID'])
+    data.expenses[0].paymentMethod = registerPaymentMethod(data, 'tennis', 'bank transfer')
+    data.payments[0].paymentMethod = registerPaymentMethod(data, 'tennis', ' PAYID ')
+    expect(registerPaymentMethod(data, 'tennis', 'Bank Transfer')).toBe('bank transfer')
+    expect(parseData(data).payments[0].paymentMethod).toBe('PayID')
+  })
+  it('recognises a single emoji for profiles', () => {
+    expect(isProfileEmoji('🏓')).toBe(true)
+    expect(isProfileEmoji('👩🏽‍💻')).toBe(true)
+    expect(isProfileEmoji('🇦🇺')).toBe(true)
+    expect(isProfileEmoji('🏓🏓')).toBe(false)
+    expect(isProfileEmoji('User')).toBe(false)
   })
   it('advances weekly sessions, and keeps the monthly anchor after short months', () => {
     const data = parseData(sample)

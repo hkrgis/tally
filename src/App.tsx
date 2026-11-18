@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowLeftRight, ArrowRight, CalendarDays, ChevronRight, CircleAlert, CircleCheck, History, KeyRound, LayoutGrid, LockKeyhole, Plus, ReceiptText, Settings2, UsersRound } from 'lucide-react'
+import { ArrowLeftRight, ArrowRight, CalendarDays, CircleAlert, CircleCheck, History, LayoutGrid, Link2, LockKeyhole, LogOut, Pencil, Plus, ReceiptText, Save, Settings2, UsersRound } from 'lucide-react'
 import { ExpenseCalendar } from './ExpenseCalendar'
 import { ExpenseForm, groupCurrencyLocked, GroupForm, MemberForm, PaymentForm, SessionForm, SessionsList } from './forms'
-import { type Expense, type Group, type Member, type Payment, type SportsSession } from './model'
+import { registerPaymentMethod, type Expense, type Group, type Member, type Payment, type SportsSession } from './model'
 import { calculateBalances, type PairBalance } from './money'
 import { ActivityFeed, Balances, Expenses, Overview } from './screens'
-import { Admin, Settings, useSettingsRequest, type Theme } from './Settings'
-import { Avatar, Empty, Sheet } from './ui'
+import { CopyField, SaveChanges, Settings, Workspace, useSettingsRequest, type Theme } from './Settings'
+import { Avatar, Sheet } from './ui'
 import { useLedger } from './useLedger'
-import { maxPasswordLength, type GroupEntry } from './vault'
+import { inviteCode, maxPasswordLength, type GroupEntry } from './vault'
 
 const views = [
   { id: 'overview', label: 'Overview', icon: LayoutGrid },
@@ -20,7 +20,7 @@ const views = [
 
 type View = typeof views[number]['id']
 type Panel =
-  | { kind: 'settings' | 'admin' | 'members' | 'sessions' }
+  | { kind: 'settings' | 'admin' | 'members' | 'sessions' | 'invite' | 'share' | 'save' | 'logout' }
   | { kind: 'unlock'; entry: GroupEntry }
   | { kind: 'group'; group?: Group }
   | { kind: 'member'; member?: Member }
@@ -43,7 +43,7 @@ function upsert<T extends { id: string }>(records: T[], record: T) {
   else records[index] = record
 }
 
-function UnlockForm({ name, busy, unlock }: { name: string; busy: boolean; unlock: (password: string) => void }) {
+function UnlockForm({ busy, unlock }: { busy: boolean; unlock: (password: string) => void }) {
   const password = useRef<HTMLInputElement>(null)
   return <form className="form-stack" onSubmit={event => {
     event.preventDefault()
@@ -52,10 +52,20 @@ function UnlockForm({ name, busy, unlock }: { name: string; busy: boolean; unloc
     unlock(value)
   }}>
     <label className="field"><span>Group password</span>
-      <input ref={password} type="password" autoComplete="off" aria-label={`Group password for ${name}`} required
+      <input ref={password} type="password" autoComplete="off" required
         maxLength={maxPasswordLength} disabled={busy} />
     </label>
     <button className="button primary" disabled={busy}><LockKeyhole size={17} />{busy ? 'Unlocking…' : 'Unlock group'}</button>
+  </form>
+}
+
+function InviteForm({ busy, openInvite }: { busy: boolean; openInvite: (code: string) => void }) {
+  const [invite, setInvite] = useState('')
+  return <form className="form-stack" onSubmit={event => { event.preventDefault(); openInvite(invite) }}>
+    <label className="field"><span>Invite link or code</span>
+      <input value={invite} onChange={event => setInvite(event.target.value)} autoCapitalize="off" autoCorrect="off" spellCheck={false} required disabled={busy} />
+    </label>
+    <button className="button primary" disabled={busy}>Continue <ArrowRight size={16} /></button>
   </form>
 }
 
@@ -64,7 +74,9 @@ export default function App() {
   const { data } = ledger
   const request = useSettingsRequest()
   const [view, setView] = useState<View>('overview')
-  const [showDirectory, setShowDirectory] = useState(false)
+  const [linkedInvite, setLinkedInvite] = useState(() => inviteCode(new URLSearchParams(window.location.search).get('group') ?? ''))
+  const [focusTransaction, setFocusTransaction] = useState<string>()
+  const [saveContents, setSaveContents] = useState<string | null>(null)
   const [identity, setIdentity] = useState('')
   const [panel, setPanel] = useState<Panel | null>(null)
   const [theme, setTheme] = useState<Theme>(() => {
@@ -82,6 +94,7 @@ export default function App() {
   const pairs = calculateBalances(expenses, payments)
   const nameOf = (id: string) => members.find(member => member.id === id)?.name ?? 'Unknown member'
   const canEdit = Boolean(ledger.editor && group && !group.archived)
+  const localWorkspace = Boolean(ledger.editor)
   const busy = request.busy || ledger.working
 
   useEffect(() => {
@@ -89,6 +102,15 @@ export default function App() {
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
+  useEffect(() => {
+    if (!ledger.dirty) return
+    function warn(event: BeforeUnloadEvent) {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [ledger.dirty])
   useEffect(() => {
     const query = window.matchMedia('(prefers-color-scheme: dark)')
     function apply() {
@@ -110,14 +132,38 @@ export default function App() {
     request.clearError()
     setPanel(next)
   }
-  function exitGroup(showGroups: boolean) {
+  function exitGroup(clearInvite = false) {
     ledger.lock()
     setIdentity('')
-    setShowDirectory(showGroups)
-    window.history.replaceState(null, '', window.location.pathname + window.location.search)
+    setFocusTransaction(undefined)
+    if (clearInvite) setLinkedInvite('')
+    window.history.replaceState(null, '', window.location.pathname + (clearInvite ? '' : window.location.search))
     setView('overview')
     open(null)
     window.scrollTo({ top: 0 })
+  }
+  function showSave() {
+    setSaveContents(null)
+    open({ kind: 'save' })
+    void request.run(async () => { setSaveContents(await ledger.prepareSave()) })
+  }
+  function logOut() {
+    ledger.closeEditor()
+    setSaveContents(null)
+    exitGroup(true)
+  }
+  function openInvite(input: string) {
+    void request.run(() => {
+      const id = inviteCode(input)
+      const entry = id && ledger.directory?.groups.find(item => item.id === id)
+      if (!entry) throw new Error(ledger.loadError || 'This invite could not be found. Check the link or ask the organiser.')
+      setLinkedInvite(id)
+      const link = new URL(window.location.href)
+      link.searchParams.set('group', id)
+      link.hash = ''
+      window.history.replaceState(null, '', link)
+      open({ kind: 'unlock', entry })
+    })
   }
   function startExpense(date?: string) {
     if (!canEdit) return
@@ -125,7 +171,7 @@ export default function App() {
   }
   function changed(next: Panel | null = null) {
     open(next)
-    setMessage('Saved to draft.')
+    setMessage('Changes applied in this workspace.')
   }
   async function saveGroup(record: Group, password: string, original?: Group) {
     if (original) {
@@ -136,7 +182,6 @@ export default function App() {
       changed({ kind: 'admin' })
     } else {
       await ledger.createGroup(record, password)
-      setShowDirectory(true)
       go('overview')
       changed({ kind: 'members' })
     }
@@ -149,7 +194,9 @@ export default function App() {
     changed({ kind: 'members' })
   }
   async function saveExpense(record: Expense, original?: Expense) {
-    await ledger.change(draft => upsert(draft.expenses, record), {
+    await ledger.change(draft => upsert(draft.expenses, {
+      ...record, paymentMethod: registerPaymentMethod(draft, record.groupId, record.paymentMethod),
+    }), {
       groupId: record.groupId, entityId: record.id, entity: 'expense', title: record.description, action: original ? 'updated' : 'created',
     })
     changed()
@@ -162,7 +209,9 @@ export default function App() {
   }
   const paymentTitle = (record: Payment) => `${nameOf(record.from)} → ${nameOf(record.to)}`.slice(0, 100)
   async function savePayment(record: Payment, original?: Payment) {
-    await ledger.change(draft => upsert(draft.payments, record), {
+    await ledger.change(draft => upsert(draft.payments, {
+      ...record, paymentMethod: registerPaymentMethod(draft, record.groupId, record.paymentMethod),
+    }), {
       groupId: record.groupId, entityId: record.id, entity: 'payment', title: paymentTitle(record), action: original ? 'updated' : 'created',
     })
     changed()
@@ -192,19 +241,45 @@ export default function App() {
       <Settings theme={theme} changeTheme={value => { setTheme(value); writePref('theme', value) }}
         busy={busy} refresh={() => request.run(() => ledger.refresh(ledger.publication ?? undefined))} />
     </Sheet>
-    if (panel.kind === 'admin') return <Sheet key="admin" title={ledger.editor ? 'Admin workspace' : 'Admin access'} close={close} busy={busy}>
+    if (panel.kind === 'admin') return <Sheet key="admin" title="Admin workspace" close={close} busy={busy}>
       {requestError}
-      {ledger.publication && <p className="notice settings-error" role="status">Committed to GitHub. The public site updates after deployment.</p>}
-      <Admin ledger={ledger} group={group} busy={busy} run={request.run}
-        groupForm={value => open({ kind: 'group', group: value })} members={() => open({ kind: 'members' })} />
+      <Workspace ledger={ledger} group={group} busy={busy} run={request.run}
+        groupForm={value => open({ kind: 'group', group: value })} members={() => open({ kind: 'members' })}
+        unlock={entry => open({ kind: 'unlock', entry })} share={() => open({ kind: 'share' })} save={showSave} />
+    </Sheet>
+    if (panel.kind === 'invite') return <Sheet key="invite" title="Open an invite" close={close} busy={busy}>
+      {requestError}
+      <InviteForm busy={busy || ledger.loading} openInvite={openInvite} />
+    </Sheet>
+    if (panel.kind === 'share' && group && localWorkspace) {
+      const link = new URL(window.location.pathname, window.location.origin)
+      link.searchParams.set('group', group.id)
+      return <Sheet key="share" title="Share invite" description="Send the link and share the group password separately." close={close}>
+        <CopyField value={link.href} label="Invite link" button="Copy invite" />
+      </Sheet>
+    }
+    if (panel.kind === 'save' && localWorkspace) return <Sheet key="save" title="Save changes" close={close} busy={busy}>
+      {requestError}
+      <SaveChanges contents={saveContents} busy={busy} dirty={ledger.dirty} check={async () => {
+        let saved: boolean | undefined
+        await request.run(async () => { saved = await ledger.confirmSaved() })
+        return saved
+      }} />
+    </Sheet>
+    if (panel.kind === 'logout') return <Sheet key="logout" title="Log out?" description="There are unsaved changes in this workspace." close={close}>
+      <div className="inline-actions">
+        <button className="button primary" onClick={showSave}>Save changes</button>
+        <button className="button danger-button" onClick={logOut}>Discard and log out</button>
+      </div>
     </Sheet>
     if (panel.kind === 'unlock') {
       const { entry } = panel
-      return <Sheet key={entry.id} title={`Unlock ${entry.name}`} description="Enter the password shared by your group organiser." close={close} busy={busy}>
+      return <Sheet key={entry.id} title="Unlock group" description="Enter the password shared by your group organiser." close={close} busy={busy}>
         {requestError}
-        <UnlockForm name={entry.name} busy={busy} unlock={password => request.run(async () => {
+        <UnlockForm busy={busy} unlock={password => request.run(async () => {
           await ledger.unlock(entry, password)
           setIdentity('')
+          setFocusTransaction(undefined)
           go('overview')
           close()
           window.requestAnimationFrame(() => document.getElementById('group-title')?.focus())
@@ -216,14 +291,14 @@ export default function App() {
         save={(record, password) => saveGroup(record, password, panel.group)} />
     </Sheet>
     if (!group) return null
-    if (panel.kind === 'sessions') return <Sheet key="sessions" title="Sports sessions" close={close} description="Confirm who attended before recording each court fee.">
+    if (panel.kind === 'sessions' && localWorkspace) return <Sheet key="sessions" title="Sports sessions" close={close} description="Confirm who attended before recording each court fee.">
       <SessionsList sessions={sessions} expenses={expenses} currency={group.currency}
         edit={canEdit ? session => open({ kind: 'session', session }) : undefined}
         record={canEdit ? (session, date) => open({ kind: 'expense', session, date }) : undefined}
         create={canEdit && activeMembers.length ? () => open({ kind: 'session' }) : undefined} />
       {canEdit && activeMembers.length === 0 && <button className="button sheet-next" onClick={() => open({ kind: 'members' })}>Add group members</button>}
     </Sheet>
-    if (panel.kind === 'members') return <Sheet key="members" title="Group members" close={close}>
+    if (panel.kind === 'members' && localWorkspace) return <Sheet key="members" title="Group members" close={close}>
       <div className="form-stack">
         {members.length > 0 && <div className="list-surface">{members.map((member, index) => <div className="roster-row" key={member.id}>
           <Avatar member={member} index={index} /><span><strong>{member.name}</strong>{!member.active && <small>Inactive</small>}</span>
@@ -258,8 +333,9 @@ export default function App() {
   }
 
   const screenProps = group && { currency: group.currency, nameOf, expenses, payments, canEdit, editExpense, editPayment }
-  const visibleGroups = [...(ledger.directory?.groups ?? [])].sort((a, b) => Number(a.archived) - Number(b.archived) || a.name.localeCompare(b.name))
-  const showStatus = showDirectory || group || ledger.editor
+  const allowedViews = localWorkspace ? views : views.filter(item => item.id !== 'activity')
+  const activeView = !localWorkspace && view === 'activity' ? 'overview' : view
+  const showStatus = group || ledger.editor || linkedInvite
   return <>
     <a className="skip-link" href="#page-content" onClick={event => {
       event.preventDefault()
@@ -267,58 +343,44 @@ export default function App() {
     }}>Skip to content</a>
     <header className="site-header">
       <div className={`header-inner${group ? '' : ' without-group'}`}>
-        <a className="brand" href="#" onClick={event => { event.preventDefault(); exitGroup(false) }} aria-label="Tally home">
+        <a className="brand" href="#" onClick={event => { event.preventDefault(); exitGroup(true) }} aria-label="Tally home">
           <span className="brand-mark" aria-hidden="true"><i /><i /><i /><i /></span><span>Tally<span className="brand-period">.</span></span>
         </a>
-        {group && <nav className="primary-nav" aria-label="Main navigation">
-          {views.map(({ id, label, icon: Icon }) => <a href={`#${id}`} key={id} aria-current={view === id ? 'page' : undefined}
-            onClick={event => { event.preventDefault(); go(id) }}>
+        {group && <nav className={`primary-nav${localWorkspace ? ' admin-nav' : ''}`} aria-label="Main navigation">
+          {allowedViews.map(({ id, label, icon: Icon }) => <a href={`#${id}`} key={id} aria-current={activeView === id ? 'page' : undefined}
+            onClick={event => { event.preventDefault(); setFocusTransaction(undefined); go(id) }}>
             <Icon size={19} strokeWidth={1.8} aria-hidden="true" /><span>{label}</span>
           </a>)}
         </nav>}
         <div className="header-actions">
-          <button className="button header-admin" onClick={() => open({ kind: 'admin' })}><KeyRound size={16} />{ledger.editor ? 'Workspace' : 'Admin'}</button>
+          {(localWorkspace || !group && !linkedInvite) && <button className="text-button header-admin" onClick={() => open({ kind: 'admin' })}><Pencil size={16} />Workspace</button>}
+          {localWorkspace && <button className="icon-button" aria-label="Log out" title="Log out"
+            onClick={() => ledger.dirty ? open({ kind: 'logout' }) : logOut()}><LogOut size={18} /></button>}
+          {!localWorkspace && group && <button className="text-button header-admin" onClick={() => exitGroup()}><LockKeyhole size={15} />Lock</button>}
           <button className="icon-button settings-button" aria-label="Settings" onClick={() => open({ kind: 'settings' })}><Settings2 size={21} strokeWidth={1.8} /></button>
         </div>
       </div>
     </header>
     <main className={`layout${group ? ' ledger-layout' : ''}`} id="page-content" tabIndex={-1}>
-      {showStatus && ledger.loading && <div className="loading" role="status">Loading groups…</div>}
+      {showStatus && ledger.loading && <div className="loading" role="status">Loading shared data…</div>}
       {showStatus && ledger.loadError && <div className="notice danger banner" role="alert"><CircleAlert size={18} /><span>{ledger.loadError}</span><button className="text-button" onClick={() => void ledger.refresh()}>Retry</button></div>}
-      {showStatus && ledger.offline && <div className="notice banner" role="status"><CircleAlert size={18} /><span>Offline. Showing the last saved group directory.</span><button className="text-button" onClick={() => void ledger.refresh()}>Retry</button></div>}
-      {showStatus && ledger.publication && <div className="notice banner" role="status"><CircleCheck size={18} /><span>Committed to GitHub. Waiting for GitHub Pages to publish.</span><button className="text-button" onClick={() => void ledger.refresh(ledger.publication ?? undefined)}>Check now</button></div>}
+      {showStatus && ledger.offline && <div className="notice banner" role="status"><CircleAlert size={18} /><span>Offline. Using the last saved copy.</span><button className="text-button" onClick={() => void ledger.refresh()}>Retry</button></div>}
+      {localWorkspace && ledger.publication && <div className="notice banner" role="status"><CircleCheck size={18} /><span>Saved on GitHub. Waiting for the live site to update.</span><button className="text-button" onClick={() => void ledger.refresh(ledger.publication ?? undefined)}>Check now</button></div>}
       {ledger.dirty && <div className="notice banner editor-banner">
-        <span>{ledger.conflict ? 'Repository changed. Review your draft.' : 'Unpublished draft changes'}</span>
-        <button className="text-button" onClick={() => open({ kind: 'admin' })}>Review draft <ChevronRight size={16} /></button>
+        <span>Unsaved changes</span>
+        <button className="button primary button-small" onClick={showSave}><Save size={16} />Save changes</button>
       </div>}
-      {!group && !showDirectory && <section className="landing" aria-labelledby="welcome-title">
+      {!group && <section className="landing" aria-labelledby="welcome-title">
         <span className="landing-icon"><LockKeyhole size={30} strokeWidth={1.65} aria-hidden="true" /></span>
         <h1 id="welcome-title">Shared expenses,<br />clear balances.</h1>
-        <p>Choose your group and enter its password to see expenses, payments and who owes what.</p>
+        <p>Open an invite to see shared expenses, payments and balances.</p>
         <button className="button primary" onClick={() => {
-          setShowDirectory(true)
-          window.requestAnimationFrame(() => document.getElementById('directory-title')?.focus())
-        }}>View groups <ArrowRight size={17} /></button>
-      </section>}
-      {!group && showDirectory && <section className="directory" aria-labelledby="directory-title">
-        <button className="text-button" onClick={() => exitGroup(false)}><ArrowLeft size={16} />Home</button>
-        <header className="section-heading"><h1 id="directory-title" tabIndex={-1}>Groups</h1>
-          {ledger.editor && <button className="button primary" onClick={() => open({ kind: 'group' })}><Plus size={17} />New group</button>}
-        </header>
-        {visibleGroups.length > 0 ? <ul className="list-surface group-list">{visibleGroups.map(entry => <li key={entry.id}>
-          <button onClick={() => open({ kind: 'unlock', entry })}>
-            <span className="tile tone-lavender" aria-hidden="true"><UsersRound size={20} /></span>
-            <span><strong>{entry.name}</strong>{entry.archived && <small>Archived</small>}</span>
-            <LockKeyhole className="muted" size={18} aria-hidden="true" />
-          </button>
-        </li>)}</ul> : ledger.directory && <Empty title="No groups yet">Groups appear here after an organiser publishes them.</Empty>}
+          open({ kind: 'invite' })
+          if (linkedInvite) openInvite(linkedInvite)
+        }} disabled={ledger.loading && !!linkedInvite}>Open an invite <ArrowRight size={17} /></button>
       </section>}
       {group && screenProps && <>
-        <div className="group-return">
-          <button className="text-button" onClick={() => exitGroup(true)}><ArrowLeft size={16} />All groups</button>
-          <button className="text-button" onClick={() => exitGroup(false)}><LockKeyhole size={15} />Lock group</button>
-        </div>
-        <section className="group-heading" aria-label="Current group">
+        {localWorkspace ? <section className="group-heading" aria-label="Current group">
           <div className="group-emblem"><UsersRound size={26} strokeWidth={1.65} aria-hidden="true" /></div>
           <div className="group-text">
             <h1 id="group-title" tabIndex={-1}>{group.name}</h1>
@@ -327,18 +389,19 @@ export default function App() {
               {!!activeMembers.length && <span className="avatar-stack" aria-hidden="true">{activeMembers.slice(0, 4).map((member, index) => <Avatar member={member} index={index} key={member.id} />)}</span>}
               <span>{activeMembers.length} {activeMembers.length === 1 ? 'member' : 'members'} · {group.currency}{group.archived && ' · Archived'}</span>
             </button>
+            <button className="text-button share-shortcut" onClick={() => open({ kind: 'share' })}><Link2 size={15} />Share invite</button>
           </div>
           {canEdit && <button className="button primary add-expense" onClick={() => startExpense()}><Plus size={20} />Add expense</button>}
-        </section>
+        </section> : <header className="viewer-heading"><h1 id="group-title" tabIndex={-1}>Shared expenses</h1></header>}
         <div key={group.id} className="view">
-          {view === 'overview' && <Overview {...screenProps} pairs={pairs} members={members} memberId={memberId} selectMember={setIdentity}
-            openExpenses={() => go('expenses')} openSessions={() => open({ kind: 'sessions' })} />}
-          {view === 'expenses' && <Expenses {...screenProps} memberId={memberId} />}
-          {view === 'calendar' && <ExpenseCalendar {...screenProps} add={canEdit ? startExpense : undefined} />}
-          {view === 'balances' && <Balances {...screenProps} pairs={pairs} settle={pair => open({ kind: 'payment', pair })} />}
-          {view === 'activity' && <ActivityFeed events={data?.activity ?? []} />}
+          {activeView === 'overview' && <Overview {...screenProps} pairs={pairs} members={members} memberId={memberId} selectMember={setIdentity} events={data?.activity ?? []}
+            openExpenses={() => { setFocusTransaction(undefined); go('expenses') }} openTransaction={id => { setFocusTransaction(id); go('expenses') }}
+            openSessions={localWorkspace ? () => open({ kind: 'sessions' }) : undefined} />}
+          {activeView === 'expenses' && <Expenses key={focusTransaction} {...screenProps} memberId={memberId} canExport={localWorkspace} focusTransaction={focusTransaction} />}
+          {activeView === 'calendar' && <ExpenseCalendar {...screenProps} add={canEdit ? startExpense : undefined} />}
+          {activeView === 'balances' && <Balances {...screenProps} pairs={pairs} settle={pair => open({ kind: 'payment', pair })} />}
+          {activeView === 'activity' && localWorkspace && <ActivityFeed events={data?.activity ?? []} />}
         </div>
-        <footer className="page-footer"><span className="status-dot" />{ledger.editor ? 'Admin workspace' : 'Viewer access'}</footer>
       </>}
     </main>
     <p role="status" className="sr-only">{message}</p>
