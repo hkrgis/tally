@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowLeftRight, ArrowRight, CalendarDays, CircleAlert, CircleCheck, History, LayoutGrid, Link2, LockKeyhole, LogOut, Pencil, Plus, ReceiptText, Save, Settings2, UsersRound } from 'lucide-react'
+import { ArrowLeftRight, ArrowRight, CalendarDays, CircleAlert, CircleCheck, History, LayoutGrid, Link2, LockKeyhole, LogOut, Pencil, Plus, ReceiptText, Save, Settings2 } from 'lucide-react'
 import { AccountPanel, useAccount } from './Accounts'
 import { ExpenseCalendar } from './ExpenseCalendar'
 import { accountError, cloudGroupId, firebaseConfigured, isCloudGroup, readCloudGroup, signOutAccount, type CloudGroup } from './firebase'
@@ -8,7 +8,7 @@ import { registerPaymentMethod, type Expense, type Group, type Member, type Paym
 import { calculateBalances, type PairBalance } from './money'
 import { ActivityFeed, Balances, Expenses, Overview } from './screens'
 import { CopyField, SaveChanges, Settings, Workspace, useSettingsRequest, type Theme } from './Settings'
-import { Avatar, Sheet } from './ui'
+import { Avatar, MemberRoster, Sheet } from './ui'
 import { useLedger } from './useLedger'
 import { inviteCode, maxPasswordLength, type GroupEntry } from './vault'
 
@@ -21,12 +21,13 @@ const views = [
 ] as const
 
 type View = typeof views[number]['id']
+type MemberPage = { kind: 'members' } | { kind: 'member'; member?: Member }
 type Panel =
-  | { kind: 'settings' | 'admin' | 'account' | 'members' | 'sessions' | 'invite' | 'share' | 'save' | 'logout' }
+  | { kind: 'settings' | 'admin' | 'account' | 'sessions' | 'invite' | 'share' | 'save' | 'logout' }
   | { kind: 'unlock'; entry: GroupEntry; cloud?: CloudGroup }
   | { kind: 'group'; group?: Group; newAccountGroupId?: string }
-  | { kind: 'member'; member?: Member }
-  | { kind: 'expense'; expense?: Expense; session?: SportsSession; date?: string }
+  | MemberPage
+  | { kind: 'expense'; expense?: Expense; session?: SportsSession; date?: string; roster?: MemberPage }
   | { kind: 'payment'; payment?: Payment; pair?: PairBalance }
   | { kind: 'session'; session?: SportsSession }
 
@@ -83,6 +84,7 @@ export default function App() {
   const [saveContents, setSaveContents] = useState<string | null>(null)
   const [identity, setIdentity] = useState('')
   const [panel, setPanel] = useState<Panel | null>(null)
+  const expenseMembersButton = useRef<HTMLButtonElement>(null)
   const [theme, setTheme] = useState<Theme>(() => {
     const value = readPref('theme')
     return value === 'dark' || value === 'light' ? value : 'system'
@@ -210,7 +212,6 @@ export default function App() {
       groupId: record.groupId, entityId: record.id, entity: 'member', title: record.name,
       action: !original ? 'created' : record.active === original.active ? 'updated' : record.active ? 'restored' : 'archived',
     })
-    changed({ kind: 'members' })
   }
   async function saveExpense(record: Expense, original?: Expense) {
     await ledger.change(draft => upsert(draft.expenses, {
@@ -253,6 +254,17 @@ export default function App() {
   const editPayment = (payment: Payment) => open({ kind: 'payment', payment })
   const close = () => open(null)
   const requestError = request.error && <p className="notice danger settings-error" role="alert">{request.error}</p>
+  function renderMemberPage(page: MemberPage, navigate: (next: MemberPage) => void) {
+    if (page.kind === 'member' && group && canEdit) {
+      return <MemberForm member={page.member} group={group} defaultName={ledger.cloudOwner && !members.length ? account?.name.slice(0, 100) : undefined}
+        save={async record => {
+          await saveMember(record, page.member)
+          navigate({ kind: 'members' })
+          setMessage('Member saved.')
+        }} />
+    }
+    return <MemberRoster members={members} edit={canEdit ? member => navigate({ kind: 'member', member }) : undefined} />
+  }
   function renderPanel() {
     if (!panel) return null
     if (panel.kind === 'settings') return <Sheet key="settings" title="Settings" close={close} busy={busy}>
@@ -271,7 +283,8 @@ export default function App() {
       {requestError}
       {accountState.error && <p className="notice danger settings-error" role="alert">{accountState.error}</p>}
       <AccountPanel account={account} loading={accountState.loading} busy={busy} run={request.run}
-        newGroup={() => open({ kind: 'group', newAccountGroupId: cloudGroupId() })} openGroup={openInvite}
+        newGroup={() => open({ kind: 'group', newAccountGroupId: cloudGroupId() })}
+        openGroup={id => id === group?.id ? close() : openInvite(id)} openGroupId={group?.id} signOut={logOut}
         editGroup={group && ledger.cloudOwner ? () => open({ kind: 'group', group }) : undefined} />
     </Sheet>
     if (panel.kind === 'invite') return <Sheet key="invite" title="Open an invite" close={close} busy={busy}>
@@ -328,24 +341,30 @@ export default function App() {
       {canEdit && activeMembers.length === 0 && <button className="button sheet-next" onClick={() => open({ kind: 'members' })}>Add group members</button>}
     </Sheet>
     if (panel.kind === 'members' && localWorkspace) return <Sheet key="members" title="Group members" close={close}>
-      <div className="form-stack">
-        {members.length > 0 && <div className="list-surface">{members.map((member, index) => <div className="roster-row" key={member.id}>
-          <Avatar member={member} index={index} /><span><strong>{member.name}</strong>{!member.active && <small>Inactive</small>}</span>
-          {canEdit && <button className="text-button" aria-label={`Edit ${member.name}`} onClick={() => open({ kind: 'member', member })}>Edit</button>}
-        </div>)}</div>}
-        {!members.length && <p className="muted">This group has no members yet.</p>}
-        {canEdit && <button className="button primary" onClick={() => open({ kind: 'member' })}><Plus size={17} />Add member</button>}
-      </div>
+      {renderMemberPage(panel, open)}
     </Sheet>
     if (!canEdit) return null
-    if (panel.kind === 'member') return <Sheet key="member" title={panel.member ? 'Edit member' : 'Add member'} close={close} busy={busy}>
-      <MemberForm group={group} member={panel.member} save={record => saveMember(record, panel.member)} />
+    if (panel.kind === 'member') return <Sheet key="member" title={panel.member ? 'Edit member' : 'Add member'}
+      backLabel="Group members" close={() => open({ kind: 'members' })} busy={busy}>
+      {renderMemberPage(panel, open)}
     </Sheet>
     if (panel.kind === 'expense') {
-      const { expense, session, date } = panel
-      return <Sheet key="expense" title={expense ? 'Edit expense' : session ? 'Record sports session' : 'Add expense'} close={close} busy={busy}>
-        <ExpenseForm group={group} members={members} memberId={memberId} expense={expense} session={session} occurrenceDate={date}
-          save={record => saveExpense(record, expense)} remove={expense ? () => removeExpense(expense) : undefined} />
+      const { expense, session, date, roster } = panel
+      const title = roster?.kind === 'member' ? roster.member ? 'Edit member' : 'Add member'
+        : roster ? 'Group members' : expense ? 'Edit expense' : session ? 'Record sports session' : 'Add expense'
+      const backLabel = roster?.kind === 'member' ? 'Group members' : roster ? 'Back to expense' : undefined
+      function navigateRoster(next?: MemberPage) {
+        open({ kind: 'expense', expense, session, date, roster: next })
+        if (!next) window.requestAnimationFrame(() => expenseMembersButton.current?.focus())
+      }
+      return <Sheet key="expense" title={title} backLabel={backLabel} busy={busy}
+        close={roster ? () => navigateRoster(roster.kind === 'member' ? { kind: 'members' } : undefined) : close}>
+        <div hidden={Boolean(roster)}>
+          <ExpenseForm group={group} members={members} memberId={memberId} expense={expense} session={session} occurrenceDate={date}
+            save={record => saveExpense(record, expense)} remove={expense ? () => removeExpense(expense) : undefined}
+            manageMembers={() => navigateRoster({ kind: 'members' })} manageButton={expenseMembersButton} />
+        </div>
+        {roster && renderMemberPage(roster, navigateRoster)}
       </Sheet>
     }
     if (panel.kind === 'payment') {
@@ -373,7 +392,7 @@ export default function App() {
     <header className="site-header">
       <div className={`header-inner${group ? '' : ' without-group'}`}>
         <a className="brand" href="#" onClick={event => { event.preventDefault(); exitGroup(true) }} aria-label="Tally home">
-          <span className="brand-mark" aria-hidden="true"><i /><i /><i /><i /></span><span>Tally<span className="brand-period">.</span></span>
+          <span className="brand-mark" aria-hidden="true"><i /><i /><i /><i /></span>Tally
         </a>
         {group && <nav className={`primary-nav${localWorkspace ? ' admin-nav' : ''}`} aria-label="Main navigation">
           {allowedViews.map(({ id, label, icon: Icon }) => <a href={`#${id}`} key={id} aria-current={activeView === id ? 'page' : undefined}
@@ -403,9 +422,8 @@ export default function App() {
         <button className="button primary button-small" onClick={showSave}><Save size={16} />Save changes</button>
       </div>}
       {!group && <section className="landing" aria-labelledby="welcome-title">
-        <span className="landing-icon"><LockKeyhole size={30} strokeWidth={1.65} aria-hidden="true" /></span>
-        <h1 id="welcome-title">Shared expenses,<br />clear balances.</h1>
-        <p>Open an invite to see shared expenses, payments and balances.</p>
+        <h1 id="welcome-title">Open a group</h1>
+        <p>Use an invite link and your group password.</p>
         <button className="button primary" onClick={() => {
           open({ kind: 'invite' })
           if (linkedInvite) openInvite(linkedInvite)
@@ -413,15 +431,18 @@ export default function App() {
       </section>}
       {group && screenProps && <>
         {localWorkspace ? <section className="group-heading" aria-label="Current group">
-          <div className="group-emblem"><UsersRound size={26} strokeWidth={1.65} aria-hidden="true" /></div>
           <div className="group-text">
             <h1 id="group-title" tabIndex={-1}>{group.name}</h1>
             {group.description && <p>{group.description}</p>}
-            <button className="people-button" aria-label="View group members" onClick={() => open({ kind: 'members' })}>
-              {!!activeMembers.length && <span className="avatar-stack" aria-hidden="true">{activeMembers.slice(0, 4).map((member, index) => <Avatar member={member} index={index} key={member.id} />)}</span>}
-              <span>{activeMembers.length} {activeMembers.length === 1 ? 'member' : 'members'} · {group.currency}{group.archived && ' · Archived'}</span>
-            </button>
-            <button className="text-button share-shortcut" onClick={() => open({ kind: 'share' })}><Link2 size={15} />Share invite</button>
+            <div className="group-actions">
+              <button className="people-button" aria-label={canEdit ? 'Manage group members' : 'View group members'} onClick={() => open({ kind: 'members' })}>
+                {!!activeMembers.length && <span className="avatar-stack" aria-hidden="true">{activeMembers.slice(0, 4).map((member, index) => <Avatar member={member} index={index} key={member.id} />)}</span>}
+                {canEdit && <span className="add-person" aria-hidden="true"><Plus size={15} /></span>}
+                <span>{activeMembers.length} {activeMembers.length === 1 ? 'member' : 'members'}</span>
+              </button>
+              <span>{group.currency}{group.archived && ' · Archived'}</span>
+              <button className="text-button" onClick={() => open({ kind: 'share' })}><Link2 size={15} />Share invite</button>
+            </div>
           </div>
           {canEdit && <button className="button primary add-expense" onClick={() => startExpense()}><Plus size={20} />Add expense</button>}
         </section> : <header className="viewer-heading"><h1 id="group-title" tabIndex={-1}>Shared expenses</h1></header>}

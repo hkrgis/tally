@@ -1,12 +1,13 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { ChevronRight, Mail, Plus } from 'lucide-react'
+import { ChevronRight, LogOut, Mail, Plus, UserRound } from 'lucide-react'
 import googleSignInDark from './assets/google-signin-dark.png'
 import googleSignInLight from './assets/google-signin-light.png'
 import {
-  accountError, checkVerification, firebaseConfigured, isAccountAdmin, listAccountGroups,
+  accountError, accountPasswordLength, checkVerification, firebaseConfigured, isAccountAdmin, listAccountGroups,
   observeAccount, registerAccount, resendVerification, sendResetEmail, signInAccount, signInWithGoogle,
   type Account, type AccountGroup,
 } from './firebase'
+import { memberInitials } from './ui'
 
 export function useAccount() {
   const [account, setAccount] = useState<Account | null>(null)
@@ -31,9 +32,9 @@ export function useAccount() {
 
 type Mode = 'signin' | 'register' | 'reset'
 
-export function AccountPanel({ account, loading, busy, run, newGroup, openGroup, editGroup }: {
+export function AccountPanel({ account, loading, busy, run, newGroup, openGroup, openGroupId, editGroup, signOut }: {
   account: Account | null; loading: boolean; busy: boolean; run: (work: () => Promise<void>) => void;
-  newGroup: () => void; openGroup: (id: string) => void; editGroup?: () => void;
+  newGroup: () => void; openGroup: (id: string) => void; openGroupId?: string; editGroup?: () => void; signOut: () => void;
 }) {
   const [mode, setMode] = useState<Mode>('signin')
   const [email, setEmail] = useState('')
@@ -88,7 +89,16 @@ export function AccountPanel({ account, loading, busy, run, newGroup, openGroup,
     setMode(next)
   }
 
-  return <div className="settings-stack">
+  return <div className="account-panel">
+    {!loading && account && <div className="account-profile">
+      <span className="avatar tone-neutral" aria-hidden="true">
+        {account.name ? memberInitials(account.name) : <UserRound size={22} />}
+      </span>
+      <div>
+        <h3>{account.name || account.email}</h3>
+        {account.name && <p>{account.email}</p>}
+      </div>
+    </div>}
     {loading ? <p role="status" className="muted">Checking your account…</p> : !account ? <div className="account-auth">
       {mode !== 'reset' && <>
         <button className="google-sign-in" type="button" disabled={busy} onClick={() => perform(signInWithGoogle)}
@@ -103,7 +113,7 @@ export function AccountPanel({ account, loading, busy, run, newGroup, openGroup,
           value={email} onChange={event => setEmail(event.target.value)} /></label>
         {mode !== 'reset' && <label className="field"><span>Password</span>
           <input name="password" type="password" autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
-            minLength={mode === 'register' ? 8 : undefined} disabled={busy} required />
+            minLength={mode === 'register' ? accountPasswordLength : undefined} disabled={busy} required />
         </label>}
         <button className="button primary" disabled={busy}>
           {mode === 'reset' ? 'Send reset link' : mode === 'register' ? 'Create account' : 'Sign in'}
@@ -122,20 +132,22 @@ export function AccountPanel({ account, loading, busy, run, newGroup, openGroup,
         setNotice('Verification email sent.')
       })}><Mail size={16} />Send again</button>
     </div> : <>
-      <p className="muted">{account.email}</p>
-      <section className="settings-section">
-        <h3>Your groups</h3>
-        <div className="inline-actions">
+      <section className="account-groups">
+        <div className="account-section-head">
+          <h3>Your groups</h3>
           <button className="button primary" disabled={busy} onClick={newGroup}><Plus size={16} />New group</button>
-          {editGroup && <button className="button" disabled={busy} onClick={editGroup}>Edit open group</button>}
         </div>
         {loadError ? <>
           <p className="notice danger" role="alert">{loadError}</p>
           <button className="text-button" onClick={() => setAttempt(value => value + 1)}>Retry</button>
-        </> : groups?.length ? <ul className="workspace-groups">
-          {groups.map(group => <li key={group.id}><button className="text-button" disabled={busy}
-            onClick={() => openGroup(group.id)}>{group.name}<ChevronRight size={16} /></button></li>)}
-        </ul> : <p className="muted" role="status">{groups ? 'Your groups will appear here.' : 'Loading your groups…'}</p>}
+        </> : groups?.length ? <ul className="account-group-list">
+          {groups.map(group => <li key={group.id}>
+            <button className="account-group-link" disabled={busy} aria-current={group.id === openGroupId ? 'true' : undefined}
+              onClick={() => openGroup(group.id)}><span>{group.name}</span><ChevronRight size={16} aria-hidden="true" /></button>
+            {group.id === openGroupId && editGroup && <button className="text-button account-group-edit" disabled={busy}
+              aria-label={`Edit ${group.name}`} onClick={editGroup}>Edit</button>}
+          </li>)}
+        </ul> : <p className="muted" role="status">{groups ? 'No groups yet.' : 'Loading your groups…'}</p>}
       </section>
       {admin && <form className="settings-section" onSubmit={event => {
         event.preventDefault()
@@ -151,5 +163,8 @@ export function AccountPanel({ account, loading, busy, run, newGroup, openGroup,
       </form>}
     </>}
     {notice && <p className="notice" role="status">{notice}</p>}
+    {!loading && account && <footer className="account-footer">
+      <button className="text-button" disabled={busy} onClick={signOut}><LogOut size={16} aria-hidden="true" />Sign out</button>
+    </footer>}
   </div>
 }

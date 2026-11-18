@@ -10,11 +10,12 @@ const config = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 }
 export const firebaseConfigured = emulator || Object.values(config).every(Boolean)
+export const accountPasswordLength = 8
 const partSize = 500_000
 const maxParts = 12
 const cloudIdPattern = /^f-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/
 
-export type Account = { id: string; email: string; verified: boolean }
+export type Account = { id: string; email: string; name: string; verified: boolean }
 export type CloudGroup = { entry: GroupEntry; revision: string; owner: string }
 export type AccountGroup = { id: string; name: string }
 
@@ -45,7 +46,7 @@ function firebase() {
 export async function observeAccount(onChange: (account: Account | null) => void) {
   const { auth, authApi } = await firebase()
   return authApi.onIdTokenChanged(auth, user => onChange(user ? {
-    id: user.uid, email: user.email ?? '', verified: user.emailVerified,
+    id: user.uid, email: user.email ?? '', name: user.displayName?.trim() ?? '', verified: user.emailVerified,
   } : null))
 }
 
@@ -66,6 +67,7 @@ export function accountError(error: unknown) {
     case 'auth/user-not-found':
     case 'auth/wrong-password': return 'Check the email and password and try again.'
     case 'auth/weak-password': return 'Choose a stronger password.'
+    case 'auth/password-does-not-meet-requirements': return `Use a password with at least ${accountPasswordLength} characters.`
     case 'auth/operation-not-allowed': return 'Enable Email/Password in Firebase Authentication.'
     case 'auth/popup-blocked': return 'Allow pop-ups for Tally, then try Google sign-in again.'
     case 'auth/popup-closed-by-user': return 'Google sign-in was canceled. Try again or sign in with your email.'
@@ -163,7 +165,7 @@ export async function readCloudGroup(id: string): Promise<CloudGroup> {
         if (codeOf(error) !== 'permission-denied') throw error
         return undefined
       })))
-    if (parts.some(part => part?.revision !== head.revision || typeof part?.payload !== 'string')) continue
+    if (parts.some((part, index) => part?.part !== index || part.revision !== head.revision || typeof part.payload !== 'string')) continue
     const payload = parts.map(part => part!.payload).join('')
     const entry = parseDirectory({ version: 2, groups: [JSON.parse(payload)] }).groups[0]
     if (entry.id !== id || !('format' in entry)) throw new Error('The stored group did not match this invite.')

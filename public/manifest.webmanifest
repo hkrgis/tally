@@ -1,8 +1,8 @@
 {
   "id": "./",
-  "name": "Tally — Shared expenses",
+  "name": "Tally - Shared expenses",
   "short_name": "Tally",
-  "description": "Track shared expenses and see exactly who owes whom.",
+  "description": "Track shared expenses and group balances.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

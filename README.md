@@ -31,11 +31,11 @@ Open the invite link shared by the organiser, or select **Open an invite** and p
 
 ## Account groups and recovery
 
-With Firebase configured, select **Sign in → Sign in with Google** to create an account or sign in with Google. To use an email and password, select **Create account** and verify your email. You can reopen your groups from **Account**. Group edits save to Firestore under the verified owner's account. Viewers can still open an invite and unlock the encrypted records with the shared group password.
+With Firebase configured, select **Sign in → Sign in with Google** to create an account or sign in with Google. Tally shows your Google profile name in Account. To use an email and password, select **Create account** and verify your email. You can reopen your groups from **Account**. Group edits save to Firestore under the verified owner's account. Viewers can still open an invite and unlock the encrypted records with the shared group password.
 
 Choose **Forgot password?** to send a reset link to your account email. Firebase project admins can also send a reset from the Authentication users page. To show **Account recovery** in Tally, add the Firestore document `accountAdmins/<Firebase Auth user UID>` with `enabled` set to boolean `true` as a Firebase project admin.
 
-For deployment, enable **Email/Password** and **Google** in Firebase Authentication, add the deployed host under **Authorised domains**, and create a Firestore database in Native mode. From this checkout, run `firebase deploy --only firestore:rules,firestore:indexes --project <project-id>`. Set the four public Firebase web values from [.env.example](.env.example) as GitHub Actions repository variables and run the Pages workflow. For local development, use `.env.local` and ensure the local hostname is authorised in Firebase, or use the emulators.
+For deployment, enable **Email/Password** and **Google** in Firebase Authentication, keep email enumeration protection enabled, and require at least eight characters for new passwords. Add the deployed host under **Authorised domains** and create a Firestore database in Native mode. From this checkout, run `firebase deploy --only firestore:rules,firestore:indexes --project <project-id>`. Set the four public Firebase web values from [.env.example](.env.example) as GitHub Actions repository variables and run the Pages workflow. For local development, use `.env.local` and ensure the local hostname is authorised in Firebase, or use the emulators.
 
 To test the access rules, run `firebase emulators:start --project demo-tally --only auth,firestore` and then `npm run test:firebase`. Set `VITE_FIREBASE_EMULATORS=true` for a local dev server with the emulators.
 

@@ -1,5 +1,5 @@
-import { useRef, useState, type FormEvent, type ReactNode } from 'react'
-import { Camera, Plus, Trash2, X } from 'lucide-react'
+import { useRef, useState, type FormEvent, type ReactNode, type Ref } from 'react'
+import { Camera, Plus, Trash2, UsersRound, X } from 'lucide-react'
 import { categories, currencies, frequencies, groupPaymentMethods, isProfileEmoji, maxExpensePhotos, nextSessionDate, splitMethods, today, type AppData, type Expense, type ExpensePhoto, type Group, type Member, type MemberAvatar, type Payment, type SportsSession } from './model'
 import { calculateBalances, decimal, minorDigits, money, parseUnits, type PairBalance } from './money'
 import { methodLabels } from './screens'
@@ -78,9 +78,10 @@ function PaymentMethodField({ group, value, setValue }: { group: Group; value: s
   </>
 }
 
-export function ExpenseForm({ group, members, memberId, expense, session, occurrenceDate, save, remove }: RecordContext & {
+export function ExpenseForm({ group, members, memberId, expense, session, occurrenceDate, save, remove, manageMembers, manageButton }: RecordContext & {
   memberId: string; expense?: Expense; session?: SportsSession; occurrenceDate?: string;
   save: (expense: Expense) => void | Promise<void>; remove?: EditAction;
+  manageMembers: () => void; manageButton: Ref<HTMLButtonElement>;
 }) {
   const active = members.filter(member => member.active)
   const preferred = active.find(member => member.id === session?.payerId)?.id ??
@@ -117,7 +118,7 @@ export function ExpenseForm({ group, members, memberId, expense, session, occurr
   function submit() {
     const total = parseUnits(amount, moneyDigits)
     if (!total) throw new Error('Enter a total greater than zero.')
-    if (!payerCount || !Object.keys(participants).length) throw new Error('Select at least one payer and participant.')
+    if (!payerCount || !participantCount) throw new Error('Select at least one payer and participant.')
     const expensesPayers = Object.entries(payers).map(([id, value]) =>
       ({ memberId: id, amount: payerCount === 1 ? total : parseUnits(value, moneyDigits) }))
     const shares = Object.entries(participants).map(([id, value]) => ({ memberId: id,
@@ -176,15 +177,18 @@ export function ExpenseForm({ group, members, memberId, expense, session, occurr
     </select></Field>
     <fieldset className="choice-group">
       <legend>{session ? 'Attendees' : 'Participants'}</legend>
-      {available.length > 1 && <div className="choice-toolbar">
-        <small>{participantCount} of {available.length} selected</small>
-        <div className="inline-actions">
+      <div className="choice-toolbar">
+        <button type="button" className="text-button" ref={manageButton} onClick={manageMembers}>
+          <UsersRound size={16} aria-hidden="true" />Manage members
+        </button>
+        {available.length > 1 && <div className="inline-actions">
+          <small>{participantCount} of {available.length} selected</small>
           <button type="button" className="text-button" disabled={participantCount === available.length} onClick={() => {
             setParticipants(Object.fromEntries(available.map(member => [member.id, selected(participants, member.id) ? participants[member.id] : initialShare])))
           }}>Select all</button>
           <button type="button" className="text-button" disabled={!participantCount} onClick={() => setParticipants({})}>Clear all</button>
-        </div>
-      </div>}
+        </div>}
+      </div>
       {available.map(member => <div className="choice-row" key={member.id}>
         <label><input type="checkbox" checked={selected(participants, member.id)}
           onChange={event => setParticipants(choose(participants, member.id, event.target.checked, initialShare))} />
@@ -286,8 +290,10 @@ export function GroupForm({ group, currencyLocked, save }: { group?: Group; curr
   </RecordForm>
 }
 
-export function MemberForm({ group, member, save }: { group: Group; member?: Member; save: (member: Member) => void | Promise<void> }) {
-  const [name, setName] = useState(member?.name ?? '')
+export function MemberForm({ group, member, defaultName, save }: {
+  group: Group; member?: Member; defaultName?: string; save: (member: Member) => void | Promise<void>;
+}) {
+  const [name, setName] = useState(member?.name ?? defaultName ?? '')
   const [active, setActive] = useState(member?.active ?? true)
   const [avatar, setAvatar] = useState<MemberAvatar | undefined>(member?.avatar)
   const [preparing, setPreparing] = useState(false)
