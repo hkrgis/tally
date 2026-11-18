@@ -1,6 +1,7 @@
 import { useId, useLayoutEffect, useRef, type ReactNode } from 'react'
 import { ArrowDownLeft, ArrowLeft, ArrowLeftRight, ArrowUpRight, CalendarDays, CarFront, ChevronDown, CircleHelp, Clapperboard, Coffee, House, Luggage, Plus, ReceiptText, ShoppingBasket, X, type LucideIcon } from 'lucide-react'
 import { categories, type Member } from './model'
+import { firstName } from './people'
 
 const categoryIcons: Record<typeof categories[number], [LucideIcon, string]> = {
   'Food & drink': [Coffee, 'peach'],
@@ -23,23 +24,44 @@ export const OwesIcon = () => <ArrowUpRight size={17} aria-hidden="true" />
 export const OwedIcon = () => <ArrowDownLeft size={17} aria-hidden="true" />
 
 const tones = ['lavender', 'peach', 'green', 'blue', 'neutral']
-export const memberInitials = (name: string) =>
-  name.trim().split(/\s+/).slice(0, 2).map(word => Array.from(word)[0]).join('').toUpperCase()
+export const nameInitial = (name: string) => (Array.from(firstName(name))[0] ?? '').toUpperCase()
 
-export function MemberRoster({ members, edit }: { members: Member[]; edit?: (member?: Member) => void }) {
+export function MemberSelect({ members, nameOf, value, ownMember, select, addSelf }: {
+  members: Member[]; nameOf: (id: string) => string; value: string; ownMember: string; select: (id: string) => void; addSelf?: () => void;
+}) {
+  return <div className="inline-actions member-select">
+    {members.length > 0 && <label className="identity">
+      <span>View as</span>
+      <select aria-label="Viewing as" value={value} onChange={event => select(event.target.value)}>
+        {!value && <option value="" disabled>Choose member</option>}
+        {members.map(member => <option value={member.id} key={member.id}>
+          {nameOf(member.id)}{member.id === ownMember ? ' (you)' : ''}{member.active ? '' : ' (inactive)'}
+        </option>)}
+      </select>
+    </label>}
+    {addSelf && <button className="text-button" onClick={addSelf}>Add myself</button>}
+  </div>
+}
+
+export function MemberRoster({ members, nameOf, edit, addSelf }: {
+  members: Member[]; nameOf: (id: string) => string; edit?: (member?: Member) => void; addSelf?: () => void;
+}) {
   return <div className="form-stack">
-    {edit && <button className="button primary" onClick={() => edit()}><Plus size={17} />Add member</button>}
+    {edit && <div className="inline-actions">
+      <button className="button primary" onClick={() => edit()}><Plus size={17} />Add member</button>
+      {addSelf && <button className="text-button" onClick={addSelf}>Add myself</button>}
+    </div>}
     {members.length ? <ul className="roster-list">{members.map((member, index) => <li className="roster-row" key={member.id}>
       <Avatar member={member} index={index} />
-      <span><strong>{member.name}</strong>{!member.active && <small>Inactive</small>}</span>
-      {edit && <button className="text-button" aria-label={`Edit ${member.name}`} onClick={() => edit(member)}>Edit</button>}
+      <span><strong>{nameOf(member.id)}</strong>{!member.active && <small>Inactive</small>}</span>
+      {edit && <button className="text-button" aria-label={`Edit ${nameOf(member.id)}`} onClick={() => edit(member)}>Edit</button>}
     </li>)}</ul> : <p className="muted">No members yet.</p>}
   </div>
 }
 
 export function Avatar({ member, index = 0 }: { member: Member; index?: number }) {
-  return <span className={`avatar tone-${tones[index % tones.length]}`} title={member.name} aria-hidden="true">
-    {member.avatar?.kind === 'photo' ? <img src={member.avatar.source} alt="" /> : member.avatar?.kind === 'emoji' ? member.avatar.value : memberInitials(member.name)}
+  return <span className={`avatar tone-${tones[index % tones.length]}`} title={firstName(member.name)} aria-hidden="true">
+    {member.avatar?.kind === 'photo' ? <img src={member.avatar.source} alt="" /> : member.avatar?.kind === 'emoji' ? member.avatar.value : nameInitial(member.name)}
   </span>
 }
 

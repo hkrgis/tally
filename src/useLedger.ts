@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { accountError, isCloudGroup, saveCloudGroup, type Account, type CloudGroup } from './firebase'
-import { parseData, type Activity, type AppData, type Group } from './model'
+import { parseData, type Activity, type AppData, type Group, type Member } from './model'
 import { hasRepository, readPublished, readRepository, serialize, StaleDataError } from './storage'
 import { createGroupKey, openGroup, sameDirectory, sameEntry, sealGroup, type Directory, type GroupEntry } from './vault'
 
@@ -130,12 +130,17 @@ export function useLedger(account: Account | null) {
     }
   }
 
-  async function createGroup(group: Group, password: string) {
+  async function createGroup(group: Group, password: string, ownerName?: string) {
     const cloud = isCloudGroup(group.id)
     if (cloud && !account?.verified) throw new Error('Verify your email before creating groups.')
     if (!cloud && !editor) throw new Error('Open the workspace before creating a group.')
     await exclusive(async () => {
-      const data: AppData = { version: 1, groups: [group], members: [], expenses: [], payments: [], sessions: [], activity: [] }
+      const owner: Member | undefined = cloud && ownerName
+        ? { id: crypto.randomUUID(), groupId: group.id, name: ownerName, active: true } : undefined
+      const data: AppData = {
+        version: 1, groups: [owner ? { ...group, ownerMemberId: owner.id } : group], members: owner ? [owner] : [],
+        expenses: [], payments: [], sessions: [], activity: [],
+      }
       const protection = await createGroupKey(password)
       const info: EventInput = { entity: 'group', groupId: group.id, entityId: group.id, title: group.name, action: 'created' }
       if (cloud && account) await storeCloud(account, data, protection, info)

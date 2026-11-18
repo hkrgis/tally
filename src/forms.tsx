@@ -2,6 +2,7 @@ import { useRef, useState, type FormEvent, type ReactNode, type Ref } from 'reac
 import { Camera, Plus, Trash2, UsersRound, X } from 'lucide-react'
 import { categories, currencies, frequencies, groupPaymentMethods, isProfileEmoji, maxExpensePhotos, nextSessionDate, splitMethods, today, type AppData, type Expense, type ExpensePhoto, type Group, type Member, type MemberAvatar, type Payment, type SportsSession } from './model'
 import { calculateBalances, decimal, minorDigits, money, parseUnits, type PairBalance } from './money'
+import { firstName } from './people'
 import { methodLabels } from './screens'
 import { Avatar, formatDay } from './ui'
 import { errorText } from './useLedger'
@@ -49,7 +50,7 @@ function RecordForm({ children, submit, submitLabel = 'Apply changes', remove, b
   </form>
 }
 
-type RecordContext = { group: Group; members: Member[] }
+type RecordContext = { group: Group; members: Member[]; nameOf: (id: string) => string }
 type Choice = Record<string, string>
 const fields = (entries: { memberId: string; amount: number }[], display: (amount: number) => string): Choice =>
   Object.fromEntries(entries.map(entry => [entry.memberId, display(entry.amount)]))
@@ -78,14 +79,14 @@ function PaymentMethodField({ group, value, setValue }: { group: Group; value: s
   </>
 }
 
-export function ExpenseForm({ group, members, memberId, expense, session, occurrenceDate, save, remove, manageMembers, manageButton }: RecordContext & {
+export function ExpenseForm({ group, members, nameOf, memberId, expense, session, occurrenceDate, save, remove, manageMembers, manageButton }: RecordContext & {
   memberId: string; expense?: Expense; session?: SportsSession; occurrenceDate?: string;
   save: (expense: Expense) => void | Promise<void>; remove?: EditAction;
   manageMembers: () => void; manageButton: Ref<HTMLButtonElement>;
 }) {
   const active = members.filter(member => member.active)
   const preferred = active.find(member => member.id === session?.payerId)?.id ??
-    active.find(member => member.id === memberId)?.id ?? active[0]?.id
+    active.find(member => member.id === memberId)?.id
   const formatAmount = (value: number) => decimal(value, group.currency)
   const amountPlaceholder = formatAmount(0)
   const moneyDigits = minorDigits(group.currency)
@@ -162,9 +163,9 @@ export function ExpenseForm({ group, members, memberId, expense, session, occurr
     <fieldset className="choice-group">
       <legend>Paid by</legend>
       {available.map(member => <div className="choice-row" key={member.id}>
-        <label><input type="checkbox" checked={selected(payers, member.id)} onChange={event => setPayers(choose(payers, member.id, event.target.checked, payerCount ? '' : amount))} />{member.name}{!member.active && ' (inactive)'}</label>
+        <label><input type="checkbox" checked={selected(payers, member.id)} onChange={event => setPayers(choose(payers, member.id, event.target.checked, payerCount ? '' : amount))} />{nameOf(member.id)}{!member.active && ' (inactive)'}</label>
         {selected(payers, member.id) && (payerCount === 1 ? <small>Full amount</small> :
-          <input inputMode="decimal" aria-label={`Amount paid by ${member.name}`} required value={payers[member.id]} placeholder={amountPlaceholder} onChange={event => setPayers({ ...payers, [member.id]: event.target.value })} />)}
+          <input inputMode="decimal" aria-label={`Amount paid by ${nameOf(member.id)}`} required value={payers[member.id]} placeholder={amountPlaceholder} onChange={event => setPayers({ ...payers, [member.id]: event.target.value })} />)}
       </div>)}
       {available.length === 0 && <p>Add a group member before recording expenses.</p>}
     </fieldset>
@@ -192,9 +193,9 @@ export function ExpenseForm({ group, members, memberId, expense, session, occurr
       {available.map(member => <div className="choice-row" key={member.id}>
         <label><input type="checkbox" checked={selected(participants, member.id)}
           onChange={event => setParticipants(choose(participants, member.id, event.target.checked, initialShare))} />
-          {member.name}{!member.active && ' (inactive)'}</label>
+          {nameOf(member.id)}{!member.active && ' (inactive)'}</label>
         {selected(participants, member.id) && method !== 'equal' && <input required inputMode={method === 'weighted' ? 'numeric' : 'decimal'}
-          aria-label={`${splitLabel} for ${member.name}`} value={participants[member.id]}
+          aria-label={`${splitLabel} for ${nameOf(member.id)}`} value={participants[member.id]}
           onChange={event => setParticipants({ ...participants, [member.id]: event.target.value })} />}
       </div>)}
     </fieldset>
@@ -220,7 +221,7 @@ export function ExpenseForm({ group, members, memberId, expense, session, occurr
   </RecordForm>
 }
 
-export function PaymentForm({ group, members, expenses, payments, pair, payment, save, remove }: RecordContext & {
+export function PaymentForm({ group, members, nameOf, expenses, payments, pair, payment, save, remove }: RecordContext & {
   expenses: Expense[]; payments: Payment[]; pair?: PairBalance; payment?: Payment;
   save: (payment: Payment) => void | Promise<void>; remove?: EditAction;
 }) {
@@ -243,10 +244,10 @@ export function PaymentForm({ group, members, expenses, payments, pair, payment,
   return <RecordForm submit={submit} remove={remove}>
     <div className="form-grid">
       <Field label="Paid by"><select required value={from} onChange={event => setFrom(event.target.value)}>
-        <option value="">Select a member</option>{members.map(member => <option key={member.id} value={member.id}>{member.name}</option>)}
+        <option value="">Select a member</option>{members.map(member => <option key={member.id} value={member.id}>{nameOf(member.id)}</option>)}
       </select></Field>
       <Field label="Paid to"><select required value={to} onChange={event => setTo(event.target.value)}>
-        <option value="">Select a member</option>{members.filter(member => member.id !== from || member.id === to).map(member => <option key={member.id} value={member.id}>{member.name}</option>)}
+        <option value="">Select a member</option>{members.filter(member => member.id !== from || member.id === to).map(member => <option key={member.id} value={member.id}>{nameOf(member.id)}</option>)}
       </select></Field>
     </div>
     {from && to && from !== to && <p className="notice">{money(outstanding, group.currency)} outstanding before this payment.</p>}
@@ -259,8 +260,11 @@ export function PaymentForm({ group, members, expenses, payments, pair, payment,
   </RecordForm>
 }
 
-export function GroupForm({ group, currencyLocked, save }: { group?: Group; currencyLocked?: boolean; save: (group: Group, password: string) => Promise<void> }) {
+export function GroupForm({ group, currencyLocked, defaultOwnerName, save }: {
+  group?: Group; currencyLocked?: boolean; defaultOwnerName?: string; save: (group: Group, password: string, ownerName?: string) => Promise<void>;
+}) {
   const [name, setName] = useState(group?.name ?? '')
+  const [ownerName, setOwnerName] = useState(defaultOwnerName?.slice(0, 100) ?? '')
   const [description, setDescription] = useState(group?.description ?? '')
   const [currency, setCurrency] = useState(group?.currency ?? 'AUD')
   const [archived, setArchived] = useState(group?.archived ?? false)
@@ -271,9 +275,13 @@ export function GroupForm({ group, currencyLocked, save }: { group?: Group; curr
   return <RecordForm submit={() => {
     const access = password.current?.value ?? ''
     if (access !== (confirmPassword.current?.value ?? '')) throw new Error('The passwords do not match.')
-    return save({ ...group, id: group?.id ?? crypto.randomUUID(), name, description, currency, archived }, access)
+    const owner = firstName(ownerName)
+    if (defaultOwnerName !== undefined && !owner) throw new Error('Enter your first name to join the group.')
+    return save({ ...group, id: group?.id ?? crypto.randomUUID(), name, description, currency, archived }, access, owner || undefined)
   }}>
     <Field label="Group name"><input required maxLength={100} value={name} onChange={event => setName(event.target.value)} /></Field>
+    {defaultOwnerName !== undefined && <Field label="Your first name"><input required autoComplete="given-name" maxLength={100}
+      value={ownerName} onChange={event => setOwnerName(event.target.value)} /></Field>}
     <Field label="Description (optional)"><textarea rows={2} maxLength={240} value={description} onChange={event => setDescription(event.target.value)} /></Field>
     <Field label="Currency"><select disabled={currencyLocked} value={currency} onChange={event => setCurrency(event.target.value)}>
       {currencies.map(value => <option key={value} value={value}>{value} · {names.of(value)}</option>)}
@@ -290,11 +298,12 @@ export function GroupForm({ group, currencyLocked, save }: { group?: Group; curr
   </RecordForm>
 }
 
-export function MemberForm({ group, member, defaultName, save }: {
-  group: Group; member?: Member; defaultName?: string; save: (member: Member) => void | Promise<void>;
+export function MemberForm({ group, member, defaultName, canLink, save }: {
+  group: Group; member?: Member; defaultName?: string; canLink?: boolean; save: (member: Member, link: boolean) => void | Promise<void>;
 }) {
   const [name, setName] = useState(member?.name ?? defaultName ?? '')
   const [active, setActive] = useState(member?.active ?? true)
+  const [link, setLink] = useState(false)
   const [avatar, setAvatar] = useState<MemberAvatar | undefined>(member?.avatar)
   const [preparing, setPreparing] = useState(false)
   const [error, setError] = useState('')
@@ -309,7 +318,7 @@ export function MemberForm({ group, member, defaultName, save }: {
   }
   return <RecordForm blocked={preparing} submit={() => {
     if (avatar?.kind === 'emoji' && !isProfileEmoji(avatar.value)) throw new Error('Enter one emoji.')
-    return save({ ...candidate, id: member?.id ?? crypto.randomUUID(), name })
+    return save({ ...candidate, id: member?.id ?? crypto.randomUUID(), name }, link)
   }}>
     <Field label="Name"><input required maxLength={100} value={name} onChange={event => setName(event.target.value)} /></Field>
     <fieldset className="choice-group profile-field">
@@ -333,10 +342,11 @@ export function MemberForm({ group, member, defaultName, save }: {
       {error && <p className="notice danger" role="alert">{error}</p>}
     </fieldset>
     {member && <label className="check-line"><input type="checkbox" checked={active} onChange={event => setActive(event.target.checked)} />Available for new expenses</label>}
+    {canLink && <label className="check-line"><input type="checkbox" checked={link} onChange={event => setLink(event.target.checked)} />This is me</label>}
   </RecordForm>
 }
 
-export function SessionForm({ group, members, session, save }: RecordContext & {
+export function SessionForm({ group, members, nameOf, session, save }: RecordContext & {
   session?: SportsSession; save: (session: SportsSession) => void | Promise<void>;
 }) {
   const available = members.filter(member => member.active || member.id === session?.payerId || session?.attendeeIds.includes(member.id))
@@ -358,13 +368,13 @@ export function SessionForm({ group, members, session, save }: RecordContext & {
         {frequencies.map(value => <option key={value}>{value}</option>)}
       </select></Field>
       <Field label="Usual payer"><select required value={payerId} onChange={event => setPayerId(event.target.value)}>
-        <option value="">Select a member</option>{available.map(member => <option value={member.id} key={member.id}>{member.name}</option>)}
+        <option value="">Select a member</option>{available.map(member => <option value={member.id} key={member.id}>{nameOf(member.id)}</option>)}
       </select></Field>
     </div>
     <fieldset className="choice-group"><legend>Usual attendees</legend>
       {available.map(member => <label className="check-line" key={member.id}>
         <input type="checkbox" checked={attendees.includes(member.id)} onChange={event => setAttendees(event.target.checked
-          ? [...attendees, member.id] : attendees.filter(id => id !== member.id))} />{member.name}
+          ? [...attendees, member.id] : attendees.filter(id => id !== member.id))} />{nameOf(member.id)}
       </label>)}
     </fieldset>
     {session && <label className="check-line"><input type="checkbox" checked={active} onChange={event => setActive(event.target.checked)} />Schedule is active</label>}

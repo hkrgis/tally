@@ -6,9 +6,10 @@ import { accountError, cloudGroupId, firebaseConfigured, isCloudGroup, readCloud
 import { ExpenseForm, groupCurrencyLocked, GroupForm, MemberForm, PaymentForm, SessionForm, SessionsList } from './forms'
 import { registerPaymentMethod, type Expense, type Group, type Member, type Payment, type SportsSession } from './model'
 import { calculateBalances, type PairBalance } from './money'
+import { accountMemberId, firstName, memberLabels } from './people'
 import { ActivityFeed, Balances, Expenses, Overview } from './screens'
 import { CopyField, SaveChanges, Settings, Workspace, useSettingsRequest, type Theme } from './Settings'
-import { Avatar, MemberRoster, Sheet } from './ui'
+import { Avatar, MemberRoster, MemberSelect, Sheet } from './ui'
 import { useLedger } from './useLedger'
 import { inviteCode, maxPasswordLength, type GroupEntry } from './vault'
 
@@ -21,7 +22,7 @@ const views = [
 ] as const
 
 type View = typeof views[number]['id']
-type MemberPage = { kind: 'members' } | { kind: 'member'; member?: Member }
+type MemberPage = { kind: 'members' } | { kind: 'member'; member?: Member; self?: boolean }
 type Panel =
   | { kind: 'settings' | 'admin' | 'account' | 'sessions' | 'invite' | 'share' | 'save' | 'logout' }
   | { kind: 'unlock'; entry: GroupEntry; cloud?: CloudGroup }
@@ -82,7 +83,7 @@ export default function App() {
   const [linkedInvite, setLinkedInvite] = useState(() => inviteCode(new URLSearchParams(window.location.search).get('group') ?? ''))
   const [focusTransaction, setFocusTransaction] = useState<string>()
   const [saveContents, setSaveContents] = useState<string | null>(null)
-  const [identity, setIdentity] = useState('')
+  const [identity, setIdentity] = useState<{ scope: string; member: string }>()
   const [panel, setPanel] = useState<Panel | null>(null)
   const expenseMembersButton = useRef<HTMLButtonElement>(null)
   const [theme, setTheme] = useState<Theme>(() => {
@@ -93,14 +94,21 @@ export default function App() {
   const group = data?.groups[0]
   const members = data?.members ?? []
   const activeMembers = members.filter(member => member.active)
-  const memberId = members.find(member => member.id === identity)?.id ?? activeMembers[0]?.id ?? members[0]?.id ?? ''
+  const scope = group ? `member:${account?.id ?? 'guest'}:${group.id}` : ''
+  const ownMember = (ledger.cloudOwner && group?.ownerMemberId) || (account && accountMemberId(members, account.name)) || ''
+  const chosen = identity?.scope === scope ? identity.member : account && scope ? readPref(scope) : ''
+  const memberId = members.find(member => member.id === chosen)?.id ??
+    (account ? ownMember : accountState.loading ? '' : activeMembers[0]?.id ?? members[0]?.id ?? '')
   const expenses = data?.expenses ?? []
   const payments = data?.payments ?? []
   const sessions = data?.sessions ?? []
   const pairs = calculateBalances(expenses, payments)
-  const nameOf = (id: string) => members.find(member => member.id === id)?.name ?? 'Unknown member'
+  const labels = memberLabels(members)
+  const nameOf = (id: string) => labels.get(id) ?? 'Unknown member'
+  const fullNameOf = (id: string) => members.find(member => member.id === id)?.name ?? nameOf(id)
   const localWorkspace = ledger.cloudOpen ? ledger.cloudOwner : Boolean(ledger.editor)
   const canEdit = Boolean(localWorkspace && group && !group.archived)
+  const canAddSelf = Boolean(account?.verified && canEdit && !ownMember)
   const hasSession = Boolean(ledger.editor || account)
   const busy = request.busy || ledger.working
 
@@ -139,9 +147,13 @@ export default function App() {
     request.clearError()
     setPanel(next)
   }
+  function selectMember(member: string) {
+    setIdentity({ scope, member })
+    if (account && scope) writePref(scope, member)
+  }
   function exitGroup(clearInvite = false) {
     ledger.lock()
-    setIdentity('')
+    setIdentity(undefined)
     setFocusTransaction(undefined)
     if (clearInvite) setLinkedInvite('')
     window.history.replaceState(null, '', window.location.pathname + (clearInvite ? '' : window.location.search))
@@ -194,7 +206,7 @@ export default function App() {
     open(next)
     setMessage('Changes applied in this workspace.')
   }
-  async function saveGroup(record: Group, password: string, original?: Group, newAccountGroupId?: string) {
+  async function saveGroup(record: Group, password: string, original?: Group, newAccountGroupId?: string, ownerName?: string) {
     if (original) {
       await ledger.change(draft => upsert(draft.groups, record), {
         groupId: record.id, entityId: record.id, entity: 'group', title: record.name,
@@ -202,16 +214,20 @@ export default function App() {
       }, password)
       changed({ kind: ledger.cloudOpen ? 'account' : 'admin' })
     } else {
-      await ledger.createGroup(newAccountGroupId ? { ...record, id: newAccountGroupId } : record, password)
+      await ledger.createGroup(newAccountGroupId ? { ...record, id: newAccountGroupId } : record, password, ownerName)
       go('overview')
       changed({ kind: 'members' })
     }
   }
-  async function saveMember(record: Member, original?: Member) {
-    await ledger.change(draft => upsert(draft.members, record), {
+  async function saveMember(record: Member, original?: Member, self?: boolean) {
+    await ledger.change(draft => {
+      upsert(draft.members, record)
+      if (self && ledger.cloudOwner) draft.groups[0].ownerMemberId = record.id
+    }, {
       groupId: record.groupId, entityId: record.id, entity: 'member', title: record.name,
       action: !original ? 'created' : record.active === original.active ? 'updated' : record.active ? 'restored' : 'archived',
     })
+    if (self) selectMember(record.id)
   }
   async function saveExpense(record: Expense, original?: Expense) {
     await ledger.change(draft => upsert(draft.expenses, {
@@ -256,14 +272,16 @@ export default function App() {
   const requestError = request.error && <p className="notice danger settings-error" role="alert">{request.error}</p>
   function renderMemberPage(page: MemberPage, navigate: (next: MemberPage) => void) {
     if (page.kind === 'member' && group && canEdit) {
-      return <MemberForm member={page.member} group={group} defaultName={ledger.cloudOwner && !members.length ? account?.name.slice(0, 100) : undefined}
-        save={async record => {
-          await saveMember(record, page.member)
+      return <MemberForm member={page.member} group={group} defaultName={page.self && account ? firstName(account.name).slice(0, 100) : undefined}
+        canLink={Boolean(ledger.cloudOwner && page.member && page.member.id !== group.ownerMemberId)}
+        save={async (record, link) => {
+          await saveMember(record, page.member, page.self || link)
           navigate({ kind: 'members' })
           setMessage('Member saved.')
         }} />
     }
-    return <MemberRoster members={members} edit={canEdit ? member => navigate({ kind: 'member', member }) : undefined} />
+    return <MemberRoster members={members} nameOf={nameOf} addSelf={canAddSelf ? () => navigate({ kind: 'member', self: true }) : undefined}
+      edit={canEdit ? member => navigate({ kind: 'member', member }) : undefined} />
   }
   function renderPanel() {
     if (!panel) return null
@@ -318,7 +336,7 @@ export default function App() {
         {requestError}
         <UnlockForm busy={busy} unlock={password => request.run(async () => {
           await ledger.unlock(entry, password, panel.cloud)
-          setIdentity('')
+          setIdentity(undefined)
           setFocusTransaction(undefined)
           go('overview')
           close()
@@ -329,7 +347,8 @@ export default function App() {
     if (panel.kind === 'group' && (panel.group ? data && localWorkspace : panel.newAccountGroupId ? account?.verified : ledger.editor)) {
       return <Sheet key="group" title={panel.group ? 'Edit group' : 'New group'} close={close} busy={busy}>
       <GroupForm group={panel.group} currencyLocked={Boolean(panel.group && data && groupCurrencyLocked(data, panel.group.id))}
-        save={(record, password) => saveGroup(record, password, panel.group, panel.newAccountGroupId)} />
+        defaultOwnerName={panel.newAccountGroupId ? firstName(account?.name ?? '') : undefined}
+        save={(record, password, ownerName) => saveGroup(record, password, panel.group, panel.newAccountGroupId, ownerName)} />
       </Sheet>
     }
     if (!group) return null
@@ -344,13 +363,13 @@ export default function App() {
       {renderMemberPage(panel, open)}
     </Sheet>
     if (!canEdit) return null
-    if (panel.kind === 'member') return <Sheet key="member" title={panel.member ? 'Edit member' : 'Add member'}
+    if (panel.kind === 'member') return <Sheet key="member" title={panel.member ? 'Edit member' : panel.self ? 'Add myself' : 'Add member'}
       backLabel="Group members" close={() => open({ kind: 'members' })} busy={busy}>
       {renderMemberPage(panel, open)}
     </Sheet>
     if (panel.kind === 'expense') {
       const { expense, session, date, roster } = panel
-      const title = roster?.kind === 'member' ? roster.member ? 'Edit member' : 'Add member'
+      const title = roster?.kind === 'member' ? roster.member ? 'Edit member' : roster.self ? 'Add myself' : 'Add member'
         : roster ? 'Group members' : expense ? 'Edit expense' : session ? 'Record sports session' : 'Add expense'
       const backLabel = roster?.kind === 'member' ? 'Group members' : roster ? 'Back to expense' : undefined
       function navigateRoster(next?: MemberPage) {
@@ -360,7 +379,7 @@ export default function App() {
       return <Sheet key="expense" title={title} backLabel={backLabel} busy={busy}
         close={roster ? () => navigateRoster(roster.kind === 'member' ? { kind: 'members' } : undefined) : close}>
         <div hidden={Boolean(roster)}>
-          <ExpenseForm group={group} members={members} memberId={memberId} expense={expense} session={session} occurrenceDate={date}
+          <ExpenseForm group={group} members={members} nameOf={nameOf} memberId={ownMember || memberId} expense={expense} session={session} occurrenceDate={date}
             save={record => saveExpense(record, expense)} remove={expense ? () => removeExpense(expense) : undefined}
             manageMembers={() => navigateRoster({ kind: 'members' })} manageButton={expenseMembersButton} />
         </div>
@@ -370,17 +389,19 @@ export default function App() {
     if (panel.kind === 'payment') {
       const { payment, pair } = panel
       return <Sheet key="payment" title={payment ? 'Edit payment' : 'Record payment'} close={close} busy={busy}>
-        <PaymentForm group={group} members={members} expenses={expenses} payments={payments} pair={pair} payment={payment}
+        <PaymentForm group={group} members={members} nameOf={nameOf} expenses={expenses} payments={payments} pair={pair} payment={payment}
           save={record => savePayment(record, payment)} remove={payment ? () => removePayment(payment) : undefined} />
       </Sheet>
     }
     if (panel.kind === 'session') return <Sheet key="session" title={panel.session ? 'Edit sports schedule' : 'New sports schedule'} close={close} busy={busy}>
-      <SessionForm group={group} members={members} session={panel.session} save={record => saveSession(record, panel.session)} />
+      <SessionForm group={group} members={members} nameOf={nameOf} session={panel.session} save={record => saveSession(record, panel.session)} />
     </Sheet>
     return null
   }
 
   const screenProps = group && { currency: group.currency, nameOf, expenses, payments, canEdit, editExpense, editPayment }
+  const memberSelect = <MemberSelect members={members} nameOf={nameOf} value={memberId} ownMember={ownMember}
+    select={selectMember} addSelf={canAddSelf && !memberId ? () => open({ kind: 'member', self: true }) : undefined} />
   const allowedViews = localWorkspace ? views : views.filter(item => item.id !== 'activity')
   const activeView = !localWorkspace && view === 'activity' ? 'overview' : view
   const showStatus = group || ledger.editor || linkedInvite
@@ -447,11 +468,12 @@ export default function App() {
           {canEdit && <button className="button primary add-expense" onClick={() => startExpense()}><Plus size={20} />Add expense</button>}
         </section> : <header className="viewer-heading"><h1 id="group-title" tabIndex={-1}>Shared expenses</h1></header>}
         <div key={group.id} className="view">
-          {activeView === 'overview' && <Overview {...screenProps} pairs={pairs} members={members} memberId={memberId} selectMember={setIdentity} events={data?.activity ?? []}
+          {activeView === 'overview' && <Overview {...screenProps} pairs={pairs} memberId={memberId} memberSelect={memberSelect} events={data?.activity ?? []}
             openExpenses={() => { setFocusTransaction(undefined); go('expenses') }} openTransaction={id => { setFocusTransaction(id); go('expenses') }}
             openSessions={localWorkspace ? () => open({ kind: 'sessions' }) : undefined} />}
-          {activeView === 'expenses' && <Expenses key={focusTransaction} {...screenProps} memberId={memberId} canExport={localWorkspace} focusTransaction={focusTransaction} />}
-          {activeView === 'calendar' && <ExpenseCalendar {...screenProps} memberId={memberId} add={canEdit ? startExpense : undefined} />}
+          {activeView === 'expenses' && <Expenses key={focusTransaction} {...screenProps} memberId={memberId} memberSelect={memberSelect}
+            fullNameOf={fullNameOf} canExport={localWorkspace} focusTransaction={focusTransaction} />}
+          {activeView === 'calendar' && <ExpenseCalendar {...screenProps} memberId={memberId} memberSelect={memberSelect} add={canEdit ? startExpense : undefined} />}
           {activeView === 'balances' && <Balances {...screenProps} pairs={pairs} settle={pair => open({ kind: 'payment', pair })} />}
           {activeView === 'activity' && localWorkspace && <ActivityFeed events={data?.activity ?? []} />}
         </div>

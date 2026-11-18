@@ -47,6 +47,7 @@ const groupSchema = z.object({
   currency: z.string().check(z.refine(value => currencies.includes(value), 'Unsupported currency')),
   archived: z.boolean(),
   paymentMethods: z.optional(z.array(paymentMethod)),
+  ownerMemberId: z.optional(id),
 })
 const memberSchema = z.object({ id, groupId: id, name: title, active: z.boolean(), avatar: z.optional(avatarSchema) })
 const expenseSchema = z.object({
@@ -133,6 +134,9 @@ export function parseData(input: unknown): AppData {
     if (records.some(record => 'groupId' in record && !groups.has(record.groupId))) throw new Error('A record refers to an unknown group.')
   }
   const inGroup = (groupId: string, ids: string[]) => ids.every(memberId => members.get(memberId) === groupId)
+  if (data.groups.some(group => group.ownerMemberId && members.get(group.ownerMemberId) !== group.id)) {
+    throw new Error('The owner’s member must belong to the group.')
+  }
   for (const record of [...data.expenses, ...data.payments]) {
     if (record.paymentMethod && !methodsByGroup.get(record.groupId)?.has(record.paymentMethod)) {
       throw new Error('Select a payment method that belongs to this group.')

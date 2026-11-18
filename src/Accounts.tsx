@@ -7,7 +7,8 @@ import {
   observeAccount, registerAccount, resendVerification, sendResetEmail, signInAccount, signInWithGoogle,
   type Account, type AccountGroup,
 } from './firebase'
-import { memberInitials } from './ui'
+import { firstName } from './people'
+import { nameInitial } from './ui'
 
 export function useAccount() {
   const [account, setAccount] = useState<Account | null>(null)
@@ -92,10 +93,10 @@ export function AccountPanel({ account, loading, busy, run, newGroup, openGroup,
   return <div className="account-panel">
     {!loading && account && <div className="account-profile">
       <span className="avatar tone-neutral" aria-hidden="true">
-        {account.name ? memberInitials(account.name) : <UserRound size={22} />}
+        {account.name ? nameInitial(account.name) : <UserRound size={22} />}
       </span>
       <div>
-        <h3>{account.name || account.email}</h3>
+        <h3>{firstName(account.name) || account.email}</h3>
         {account.name && <p>{account.email}</p>}
       </div>
     </div>}
