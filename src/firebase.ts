@@ -27,7 +27,8 @@ export type GroupHead = {
   createdAt?: string; archivedAt?: string; archivedBy?: string; restoredAt?: string; legacyName?: string;
 }
 export type CloudGroup = GroupHead & { entry: GroupEntry; memberId: string }
-export type AccountGroup = GroupHead & { role: 'owned' | 'joined'; name: string; balance?: number }
+export type GroupRole = 'owned' | 'joined'
+export type AccountGroup = GroupHead & { name: string; balance?: number }
 
 export const cloudGroupId = () => `f-${crypto.randomUUID()}`
 export const isCloudGroup = (id: string) => cloudIdPattern.test(id)
@@ -193,24 +194,29 @@ export function summariseGroup(data: AppData): GroupSummary {
   }
 }
 
-export async function listAccountGroups(accountId: string): Promise<AccountGroup[]> {
+export async function listAccountGroups(accountId: string, role: GroupRole): Promise<AccountGroup[]> {
   const { db, store } = await firebase()
-  const [owned, joined] = await Promise.all(['groups', 'joined'].map(index =>
-    store.getDocsFromServer(store.collection(db, 'accounts', accountId, index))))
-  const groups = await Promise.all([...owned.docs, ...joined.docs].map(async (reference): Promise<AccountGroup | null> => {
+  const index = role === 'owned' ? 'groups' : 'joined'
+  const listing = await store.getDocsFromServer(store.collection(db, 'accounts', accountId, index)).catch(error => {
+    if (codeOf(error) === 'permission-denied') {
+      throw new Error(`Firestore blocked access to your ${role} groups. Ask the site administrator to check the deployed Firestore rules.`)
+    }
+    throw error
+  })
+  const groups = await Promise.all(listing.docs.map(async (reference): Promise<AccountGroup | null> => {
     try {
       const target = store.doc(db, 'cloudGroups', reference.id)
       const doc = await store.getDocFromServer(target)
       if (!doc.exists()) return null
       const head = consistentHead(doc.id, doc.data())
       if (head.archivedAt) return null
-      const role = head.owner === accountId ? 'owned' : 'joined'
+      if ((head.owner === accountId) !== (role === 'owned')) return null
       const memberId = role === 'owned' ? head.summary?.ownerMemberId ?? '' :
         (await store.getDocFromServer(store.doc(target, 'members', accountId))).data()?.memberId
       if (role === 'joined' && typeof memberId !== 'string') return null
       const stats = memberId ? (await store.getDocFromServer(store.doc(target, 'stats', 'current'))).data() : undefined
       const balance = stats?.revision === head.revision ? stats?.balances?.[memberId] : undefined
-      return { ...head, role, balance: Number.isSafeInteger(balance) ? balance : undefined, name: head.summary?.name ?? head.legacyName ?? String(reference.data().name ?? `Group ${head.id.slice(-8)}`) }
+      return { ...head, balance: Number.isSafeInteger(balance) ? balance : undefined, name: head.summary?.name ?? head.legacyName ?? String(reference.data().name ?? `Group ${head.id.slice(-8)}`) }
     } catch (error) {
       if (codeOf(error) === 'permission-denied') return null
       throw error
@@ -311,7 +317,11 @@ export async function saveCloudGroup(account: Account, data: AppData, entry: Gro
     for (let part = count; part < (head?.partCount ?? 0); part++) transaction.delete(store.doc(group, 'parts', String(part)))
   }).catch(async error => {
     const saved = await store.getDocFromServer(group).then(result => result.data()).catch(() => undefined)
-    if (saved?.revision !== revision || saved.owner !== owner) throw error
+    if (saved?.revision === revision && saved.owner === owner) return
+    if (!expectedRevision && codeOf(error) === 'permission-denied') {
+      throw new Error('Firestore blocked group creation. Ask the site administrator to check the deployed Firestore rules.')
+    }
+    throw error
   })
   return { id: entry.id, entry, revision, owner, partCount: count, summary, memberId: summary.ownerMemberId }
 }

@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Archive, ArrowLeftRight, ArrowRight, CalendarDays, History, LayoutGrid, Link2, LockKeyhole, LogOut, Pencil, Plus, ReceiptText, Settings2 } from 'lucide-react'
 import { AccountPanel, AuthCard, useAccount } from './Accounts'
 import { ExpenseCalendar } from './ExpenseCalendar'
-import { accountError, changeGroupArchive, cloudGroupId, firebaseConfigured, isPlatformAdmin, joinCloudGroup, listAccountGroups, readGroupHead, signOutAccount, summariseGroup, type Account } from './firebase'
+import { accountError, changeGroupArchive, cloudGroupId, firebaseConfigured, isPlatformAdmin, joinCloudGroup, readGroupHead, signOutAccount, summariseGroup, type Account } from './firebase'
 import { ExpenseForm, groupCurrencyLocked, GroupForm, MemberForm, PaymentForm } from './forms'
 import { ImportGroup, ShareGroup } from './GroupActions'
 import { MyGroups, PlatformGroups } from './GroupDirectory'
@@ -177,7 +177,6 @@ function SignedInApp({ account, theme, changeTheme }: {
   const fullNameOf = (id: string) => members.find(member => member.id === id)?.name ?? nameOf(id)
   const canEdit = Boolean(group && ledger.cloudOwner)
   const busy = request.busy || ledger.working
-  const loadGroups = useCallback(() => listAccountGroups(account.id), [account.id])
 
   useEffect(() => {
     if (!account.verified) return
@@ -490,7 +489,7 @@ function SignedInApp({ account, theme, changeTheme }: {
         archive={record => open({ kind: 'archive', id: record.id, name: record.summary?.name ?? record.legacyName ?? 'This group', restore: Boolean(record.archivedAt) })} />
         : <p className={adminReady ? 'notice danger' : 'loading'} role={adminReady ? 'alert' : 'status'}>
           {adminReady ? 'Platform Admin is unavailable to your account.' : 'Checking access…'}</p>
-        : route.page === 'groups' ? <MyGroups load={loadGroups} version={version}
+        : route.page === 'groups' ? <MyGroups accountId={account.id} version={version}
           create={() => open({ kind: 'group', newId: cloudGroupId() })} join={() => open({ kind: 'invite' })} open={openGroup} />
         : !group && <LockedGroup key={`${route.id}:${route.archived}:${route.token}`} route={route} admin={admin} adminReady={adminReady} busy={busy}
           unlock={password => perform(async () => {

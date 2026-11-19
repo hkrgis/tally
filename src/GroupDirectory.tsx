@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Archive, ChevronRight, Plus, RotateCcw, UsersRound } from 'lucide-react'
-import { accountError, listAccountGroups, listPlatformGroups, type AccountGroup, type GroupHead } from './firebase'
+import { accountError, listAccountGroups, listPlatformGroups, type GroupHead } from './firebase'
 import { balanceLabel } from './money'
 import { Empty, formatEventTime } from './ui'
 
@@ -25,15 +25,49 @@ function DirectoryStatus({ error, retry }: { error: string; retry: () => void })
   </div> : <p className="loading" role="status">Loading groups…</p>
 }
 
-export function MyGroups({ load, version, create, join, open }: {
-  load: () => ReturnType<typeof listAccountGroups>; version: number;
+const groupSections = [
+  { role: 'owned', label: 'Owned by Me', empty: 'No groups owned yet', hint: 'Create a group to start sharing expenses.' },
+  { role: 'joined', label: 'Groups I?ve Joined', empty: 'No joined groups yet', hint: 'Join using a link from a group organiser.' },
+] as const
+
+function GroupSection({ accountId, section, version, open }: {
+  accountId: string; section: typeof groupSections[number]; version: number; open: (id: string) => void;
+}) {
+  const { role, label, empty, hint } = section
+  const load = useCallback(() => listAccountGroups(accountId, role), [accountId, role])
+  const { data, error, retry } = useDirectory(load, version)
+  const titleId = `${role}-groups`
+  return <section className="directory-section" aria-labelledby={titleId}>
+    <header className="section-heading">
+      <h2 id={titleId}>{label}{data && <span className="muted"> ({data.length})</span>}</h2>
+    </header>
+    {!data ? <DirectoryStatus error={error} retry={retry} /> : data.length ? <ul className="list-surface directory-list">
+      {data.map(group => {
+        const summary = group.summary
+        const net = group.balance
+        const activity = group.restoredAt && group.restoredAt > (summary?.lastActivityAt ?? '') ? group.restoredAt : summary?.lastActivityAt
+        return <li key={group.id}>
+          <button className="group-list-row" onClick={() => open(group.id)}>
+            <span className="tile tone-neutral" aria-hidden="true"><UsersRound size={19} /></span>
+            <span className="group-list-text"><strong>{group.name}</strong>
+              <small>{summary ? `${summary.memberCount} ${summary.memberCount === 1 ? 'member' : 'members'}` : 'Member count available after opening'}
+                {activity && <> ? Last activity {formatEventTime(activity)}</>}</small>
+            </span>
+            <span className={net ? net < 0 ? 'negative' : 'positive' : 'muted'}>
+              {summary && typeof net === 'number' ? balanceLabel(net, summary.currency) : 'Balance unavailable'}
+            </span>
+            <ChevronRight size={16} className="chevron" aria-hidden="true" />
+          </button>
+        </li>
+      })}
+    </ul> : <Empty title={empty}>{hint}</Empty>}
+  </section>
+}
+
+export function MyGroups({ accountId, version, create, join, open }: {
+  accountId: string; version: number;
   create: () => void; join: () => void; open: (id: string) => void;
 }) {
-  const { data, error, retry } = useDirectory<AccountGroup>(load, version)
-  const sections = [
-    { id: 'owned', label: 'Owned by Me', empty: 'Create a group to start sharing expenses.' },
-    { id: 'joined', label: 'Groups I’ve Joined', empty: 'Join using a link from a group organiser.' },
-  ] as const
   return <section aria-labelledby="my-groups">
     <header className="directory-heading">
       <h1 id="my-groups">My Groups</h1>
@@ -42,32 +76,8 @@ export function MyGroups({ load, version, create, join, open }: {
         <button className="button" onClick={join}>Join Group</button>
       </div>
     </header>
-    {!data ? <DirectoryStatus error={error} retry={retry} /> : sections.map(section => {
-      const groups = data.filter(group => group.role === section.id)
-      return <section className="directory-section" key={section.id} aria-labelledby={section.id}>
-        <header className="section-heading"><h2 id={section.id}>{section.label} <span className="muted">({groups.length})</span></h2></header>
-        {groups.length ? <ul className="list-surface directory-list">
-          {groups.map(group => {
-            const summary = group.summary
-            const net = group.balance
-            const activity = group.restoredAt && group.restoredAt > (summary?.lastActivityAt ?? '') ? group.restoredAt : summary?.lastActivityAt
-            return <li key={group.id}>
-              <button className="group-list-row" onClick={() => open(group.id)}>
-                <span className="tile tone-neutral" aria-hidden="true"><UsersRound size={19} /></span>
-                <span className="group-list-text"><strong>{group.name}</strong>
-                  <small>{summary ? `${summary.memberCount} ${summary.memberCount === 1 ? 'member' : 'members'}` : 'Member count available after opening'}
-                    {summary?.lastActivityAt && <> · Last activity {formatEventTime(summary.lastActivityAt)}</>}</small>
-                </span>
-                <span className={net ? net < 0 ? 'negative' : 'positive' : 'muted'}>
-                  {summary && typeof net === 'number' ? balanceLabel(net, summary.currency) : 'Balance unavailable'}
-                </span>
-                <ChevronRight size={16} className="chevron" aria-hidden="true" />
-              </button>
-            </li>
-          })}
-        </ul> : <Empty title={section.id === 'owned' ? 'No groups owned yet' : 'No joined groups yet'}>{section.empty}</Empty>}
-      </section>
-    })}
+    {groupSections.map(section => <GroupSection key={section.role} accountId={accountId}
+      section={section} version={version} open={open} />)}
   </section>
 }
 
