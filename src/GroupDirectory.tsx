@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Archive, ChevronRight, Plus, RotateCcw, UsersRound } from 'lucide-react'
 import { accountError, listAccountGroups, listPlatformGroups, type GroupHead } from './firebase'
-import { balanceLabel } from './money'
-import { Empty, formatEventTime } from './ui'
+import { balanceLabel, money } from './money'
+import { Empty, formatEventTime, formatDay } from './ui'
 
 function useDirectory<T>(load: () => Promise<T[]>, version: number) {
   const [data, setData] = useState<T[] | null>(null)
@@ -22,12 +22,12 @@ function DirectoryStatus({ error, retry }: { error: string; retry: () => void })
   return error ? <div className="form-stack">
     <p className="notice danger" role="alert">{error}</p>
     <button className="text-button" onClick={retry}>Try again</button>
-  </div> : <p className="loading" role="status">Loading groups…</p>
+  </div> : <div className="loading-skeleton" role="status"><span className="sr-only">Loading groups&hellip;</span><i aria-hidden="true" /><i aria-hidden="true" /></div>
 }
 
 const groupSections = [
-  { role: 'owned', label: 'Owned by Me', empty: 'No groups owned yet', hint: 'Create a group to start sharing expenses.' },
-  { role: 'joined', label: "Groups I've Joined", empty: 'No joined groups yet', hint: 'Join using a link from a group organiser.' },
+  { role: 'owned', label: 'Owned by me', empty: 'No groups owned yet', hint: 'Create a group to start sharing expenses.' },
+  { role: 'joined', label: "Groups I've joined", empty: 'No joined groups yet', hint: 'Join using a link from a group organiser.' },
 ] as const
 
 function GroupSection({ accountId, section, version, open }: {
@@ -50,11 +50,12 @@ function GroupSection({ accountId, section, version, open }: {
           <button className="group-list-row" onClick={() => open(group.id)}>
             <span className="tile tone-neutral" aria-hidden="true"><UsersRound size={19} /></span>
             <span className="group-list-text"><strong>{group.name}</strong>
+              {summary?.description && <small className="group-description">{summary.description}</small>}
               <small>{summary ? `${summary.memberCount} ${summary.memberCount === 1 ? 'member' : 'members'}` : 'Member count available after opening'}
-                {activity && <> &middot; Last activity {formatEventTime(activity)}</>}</small>
+                {activity && <> &middot; Last activity {formatDay(activity.slice(0, 10))}</>}</small>
             </span>
             <span className={net ? net < 0 ? 'negative' : 'positive' : 'muted'}>
-              {summary && typeof net === 'number' ? balanceLabel(net, summary.currency) : 'Balance unavailable'}
+              {summary && typeof net === 'number' ? (net ? balanceLabel(net, summary.currency) : 'Net ' + money(0, summary.currency)) : 'Balance unavailable'}
             </span>
             <ChevronRight size={16} className="chevron" aria-hidden="true" />
           </button>
@@ -64,18 +65,18 @@ function GroupSection({ accountId, section, version, open }: {
   </section>
 }
 
-export function MyGroups({ accountId, version, create, join, open }: {
-  accountId: string; version: number;
+export function MyGroups({ accountId, version, create, join, open, compact = false, offline = false }: {
+  accountId: string; version: number; compact?: boolean; offline?: boolean;
   create: () => void; join: () => void; open: (id: string) => void;
 }) {
-  return <section aria-labelledby="my-groups">
-    <header className="directory-heading">
+  return <section aria-labelledby={compact ? undefined : "my-groups"}>
+    {!compact && <header className="directory-heading">
       <h1 id="my-groups">My Groups</h1>
       <div className="inline-actions">
-        <button className="button primary" onClick={create}><Plus size={17} />Create Group</button>
-        <button className="button" onClick={join}>Join Group</button>
+        <button className="button primary" onClick={create} disabled={offline}><Plus size={17} />Create group</button>
+        <button className="button" onClick={join} disabled={offline}>Join group</button>
       </div>
-    </header>
+    </header>}
     {groupSections.map(section => <GroupSection key={section.role} accountId={accountId}
       section={section} version={version} open={open} />)}
   </section>
@@ -115,6 +116,8 @@ export function PlatformGroups({ version, archive, open }: {
               <div><dt>Members</dt><dd>{group.summary?.memberCount ?? 'Unavailable'}</dd></div>
               <div><dt>Created</dt><dd>{created ? formatEventTime(created) : 'Unavailable'}</dd></div>
               {group.archivedAt && <div><dt>Archived</dt><dd>{formatEventTime(group.archivedAt)}</dd></div>}
+              {group.archivedBy && <div><dt>Archived by UID</dt><dd>{group.archivedBy}</dd></div>}
+              {group.restoredAt && <div><dt>Restored</dt><dd>{formatEventTime(group.restoredAt)}</dd></div>}
             </dl>
           </div>
           <div className="inline-actions">

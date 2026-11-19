@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { accountError, changeGroupArchive, isCloudGroup, readCloudGroup, readGroupHead, saveCloudGroup, summariseGroup, watchGroupHead, type Account, type AccountLedger } from './firebase'
+import { accountError, codeOf, readCloudGroup, readGroupHead, saveCloudGroup, watchGroupHead, type Account, type AccountLedger } from './firebase'
 import type { InviteDraft } from './memberInvites'
 import { parseData, type Activity, type AppData, type Group, type Member } from './model'
+import { firebaseGroupId } from './routing'
 import { decryptGroup, openGroup, parseDirectory, sealGroup } from './vault'
 
 type Protection = Pick<Awaited<ReturnType<typeof openGroup>>, 'key' | 'salt'>
@@ -41,12 +42,12 @@ export function useLedger(account: Account) {
           const data = 'data' in cloud ? cloud.data : await decryptGroup(cloud.entry, protection!.key)
           data.groups[0].archived = Boolean(cloud.archivedAt)
           if (mounted) setOpened(current => current === opened ? { ...cloud, data, protection } : current)
-        }).catch(lost)
+        }).catch(issue => { if (codeOf(issue) !== 'unavailable') lost() })
       }
     }, lost).then(stop => {
       if (mounted) unsubscribe = stop
       else stop()
-    }).catch(lost)
+    }).catch(issue => { if (codeOf(issue) !== 'unavailable') lost() })
     return () => { mounted = false; unsubscribe?.() }
   }, [opened])
 
@@ -61,6 +62,7 @@ export function useLedger(account: Account) {
   }
 
   async function exclusive(work: () => Promise<void>) {
+    if (!navigator.onLine) throw new Error('Reconnect to continue. Your changes have not been saved.')
     if (workingLock.current) throw new Error('Wait for the current operation to finish.')
     workingLock.current = true
     setWorking(true)
@@ -80,9 +82,8 @@ export function useLedger(account: Account) {
       if (latest.revision !== cloud.revision || latest.archivedAt !== cloud.archivedAt) {
         throw new Error('The group changed while opening. Try again.')
       }
-      if (data.groups[0].archived && !cloud.archivedAt && !cloud.summary && !cloud.restoredAt) {
-        if (cloud.owner === account.id) await changeGroupArchive(id, true, summariseGroup(data))
-        throw new Error('This legacy group was archived. The platform admin can access or restore it.')
+      if (data.groups[0].archived && !cloud.archivedAt && !cloud.restoredAt) {
+        throw new Error('This legacy group was archived. Ask the platform admin to register its archived status before opening it.')
       }
       data.groups[0].archived = Boolean(cloud.archivedAt)
       openAccountGroup({ ...cloud, data, protection: { key, salt } })
@@ -121,13 +122,7 @@ export function useLedger(account: Account) {
       const entry = entries.find(group => group.id === source) ?? (!source && entries.length === 1 ? entries[0] : undefined)
       if (!entry) throw new Error('Enter the group code for a group in this file.')
       const { data, key, salt } = await openGroup(entry, password)
-      let id = isCloudGroup(entry.id) ? entry.id : `f-${entry.id.toLowerCase()}`
-      if (!isCloudGroup(id)) {
-        const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(entry.id))
-        const hex = Array.from(new Uint8Array(digest, 0, 16), octet => octet.toString(16).padStart(2, '0')).join('')
-        const segments = [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20)]
-        id = `f-${segments.join('-')}`
-      }
+      const id = await firebaseGroupId(entry.id)
       const group = data.groups[0]
       group.id = id
       for (const table of [data.members, data.expenses, data.payments, data.sessions, data.activity]) {

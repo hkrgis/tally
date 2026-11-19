@@ -148,13 +148,22 @@ try {
   const edit = writeBatch(owner.db)
   const revision = crypto.randomUUID()
   const nextPart = { ...storedPart, revision }
-  edit.update(group(owner.db), { revision, partCount: 1 })
+  edit.update(group(owner.db), { revision, partCount: 1, receiptVersion: 1, summary: { ...summary, description: "Shared matches" } })
   edit.set(part(owner.db), nextPart)
   edit.set(stats(owner.db), { revision, balances })
   edit.delete(part(owner.db, 1))
   await edit.commit()
   assert.deepEqual((await getDoc(part(member.db))).data(), nextPart)
   await denied(getDoc(part(member.db, 1)))
+  assert.equal((await getDoc(group(member.db))).data().summary.description, "Shared matches")
+  const staleEditor = writeBatch(owner.db)
+  const staleRevision = crypto.randomUUID()
+  staleEditor.update(group(owner.db), { revision: staleRevision, receiptVersion: deleteField() })
+  staleEditor.set(part(owner.db), { ...nextPart, revision: staleRevision })
+  staleEditor.set(stats(owner.db), { revision: staleRevision, balances })
+  await denied(staleEditor.commit())
+  assert.equal((await getDoc(group(owner.db))).data().receiptVersion, 1)
+  assert.deepEqual((await getDoc(part(owner.db))).data(), nextPart)
 
   await denied(updateDoc(group(owner.db), { archivedAt: serverTimestamp(), archivedBy: ownerUser.uid }))
   const badArchive = writeBatch(owner.db)
@@ -255,10 +264,10 @@ try {
   legacyUpgrade.set(doc(admin.db, legacyPath, 'parts', '0'), {
     part: 0, revision: upgradedRevision, payload: 'converted-archive',
   })
-  await legacyUpgrade.commit()
+  await denied(legacyUpgrade.commit())
   assert.equal((await getDoc(doc(admin.db, legacyPath))).data().archivedBy, adminUser.uid)
   await denied(getDoc(doc(owner.db, legacyPath, 'parts', '0')))
-  assert.equal((await getDoc(doc(admin.db, legacyPath, 'parts', '0'))).data().payload, 'converted-archive')
+  assert.equal((await getDoc(doc(admin.db, legacyPath, 'parts', '0'))).data().payload, 'old-encrypted-snapshot')
 
   const importedId = `f-${crypto.randomUUID()}`
   const imported = db => doc(db, 'cloudGroups', importedId)

@@ -90,19 +90,22 @@ service cloud.firestore {
 
     function validSummary(data) {
       return data is map && data.keys().hasAll(['name', 'currency', 'memberCount', 'lastActivityAt', 'ownerMemberId'])
-        && data.keys().hasOnly(['name', 'currency', 'memberCount', 'lastActivityAt', 'ownerMemberId', 'createdOn'])
+        && data.keys().hasOnly(['name', 'currency', 'memberCount', 'lastActivityAt', 'ownerMemberId', 'createdOn', 'description'])
         && data.name is string && data.name.size() >= 1 && data.name.size() <= 100
         && data.currency is string && data.currency.matches('^[A-Z]{3}$')
         && data.memberCount is int && data.memberCount >= 0
         && data.lastActivityAt is string && data.lastActivityAt.size() <= 30
         && data.ownerMemberId is string && data.ownerMemberId.size() <= 80
-        && (!('createdOn' in data) || (data.createdOn is string && data.createdOn.size() <= 30));
+        && (!('createdOn' in data) || (data.createdOn is string && data.createdOn.size() <= 30))
+        && (!('description' in data) || (data.description is string && data.description.size() <= 240));
     }
 
     function validContent(data) {
       return data.keys().hasAll(['owner', 'revision', 'partCount', 'summary', 'createdAt'])
-        && data.keys().hasOnly(['owner', 'revision', 'partCount', 'summary', 'createdAt', 'archivedAt', 'archivedBy', 'restoredAt', 'storage'])
+        && data.keys().hasOnly(['owner', 'revision', 'partCount', 'summary', 'createdAt', 'archivedAt', 'archivedBy', 'restoredAt', 'storage', 'receiptVersion'])
         && (!('storage' in data) || data.storage == 'account')
+        && (!('receiptVersion' in data) || (data.receiptVersion is int && data.receiptVersion == 1))
+        && (!('description' in data.summary) || data.get('storage', '') == 'account')
         && data.owner is string && data.revision is string && data.revision.size() == 36
         && data.partCount is int && data.partCount >= 1 && data.partCount <= 12
         && (data.get('createdAt', null) == null || data.createdAt is timestamp)
@@ -120,7 +123,8 @@ service cloud.firestore {
       return active(previous) && (activeOwner(previous) || admin())
         && next.diff(previous).affectedKeys().hasOnly(['archivedAt', 'archivedBy', 'summary', 'legacyName'])
         && (next.get('summary', null) == previous.get('summary', null)
-          || (!('summary' in previous) && validSummary(next.summary)))
+          || (!('summary' in previous) && validSummary(next.summary)
+            && !('description' in next.summary)))
         && (next.get('legacyName', null) == previous.get('legacyName', null)
           || (!('summary' in next) && next.legacyName == get(ownedPath(previous.owner, id)).data.name))
         && validArchive(id, next);
@@ -141,22 +145,12 @@ service cloud.firestore {
       return activeOwner(previous) && active(next) && validContent(next)
         && !next.keys().hasAny(['archivedAt', 'archivedBy'])
         && next.owner == previous.owner && next.revision != previous.revision
-        && (previous.get('storage', '') != 'account' || next.get('storage', '') == 'account')
+        && next.get('storage', '') == previous.get('storage', '')
+        && (previous.get('receiptVersion', 0) == 0 || next.get('receiptVersion', 0) == 1)
         && next.get('createdAt', null) == previous.get('createdAt', null)
         && next.get('restoredAt', null) == previous.get('restoredAt', null)
         && (ownerMemberId(next) == '' || !exists(assignedMember(id, ownerMemberId(next))))
         && existsAfter(ownedPath(next.owner, id))
-        && getAfter(statsPath(id)).data.revision == next.revision;
-    }
-
-    function canUpgradeArchived(id) {
-      let previous = resource.data;
-      let next = request.resource.data;
-      return !active(previous) && admin() && validContent(next)
-        && previous.get('storage', '') != 'account' && next.storage == 'account'
-        && next.diff(previous).affectedKeys().hasOnly(['storage', 'revision', 'partCount', 'summary', 'createdAt', 'legacyName'])
-        && next.get('createdAt', null) == previous.get('createdAt', null)
-        && next.revision != previous.revision
         && getAfter(statsPath(id)).data.revision == next.revision;
     }
 
@@ -331,7 +325,7 @@ service cloud.firestore {
         && getAfter(statsPath(id)).data.revision == request.resource.data.revision
         && ((active(request.resource.data) && !request.resource.data.keys().hasAny(['archivedAt', 'archivedBy'])
             && existsAfter(ownedPath(request.auth.uid, id))) || validArchive(id, request.resource.data));
-      allow update: if groupId(id) && (canSave(id) || canArchive(id) || canRestore(id) || canUpgradeArchived(id));
+      allow update: if groupId(id) && (canSave(id) || canArchive(id) || canRestore(id));
 
       match /linkedEmails/{key} {
         allow get: if activeOwner(get(groupPath(id)).data);
@@ -437,10 +431,7 @@ service cloud.firestore {
         let previous = exists(groupPath(id)) ? get(groupPath(id)).data : null;
         return verified()
           && (previous == null ? next.owner == request.auth.uid :
-            next.revision != previous.revision && (
-              (activeOwner(previous) && active(next) && next.owner == request.auth.uid)
-              || (!active(previous) && admin() && previous.get('storage', '') != 'account' && next.storage == 'account')
-            ));
+            next.revision != previous.revision && activeOwner(previous) && active(next) && next.owner == request.auth.uid);
       }
 
       match /stats/current {

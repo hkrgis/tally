@@ -1,16 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
-import { CalendarDays, Eye, History, LayoutGrid, ReceiptText, Scale } from 'lucide-react'
+import { Eye } from 'lucide-react'
 import { accountError } from './firebase'
 import { guestDays, tokenPattern } from './guestData'
 import { manageGuestShare, readGuest, readGuestConfig, type GuestShare } from './guestStore'
+import { GroupNavigation } from './GroupNavigation'
+import { GroupHome, People } from './GroupViews'
 import { ExpenseCalendar } from './ExpenseCalendar'
 import type { AppData } from './model'
 import { calculateBalances } from './money'
 import { memberLabels } from './people'
-import { ActivityFeed, Balances, Expenses, Overview } from './screens'
+import { ActivityFeed, Balances, Expenses } from './screens'
 import { CopyField } from './Settings'
-import { formatEventTime, MemberRoster, Sheet } from './ui'
-import type { GroupView } from './routing'
+import { formatEventTime, Sheet } from './ui'
+import { groupViews, type GroupView } from './routing'
 
 export function guestToken(input: string) {
   const value = input.trim()
@@ -86,18 +88,18 @@ export function GuestSharePanel({ data, revision }: { data: AppData; revision: s
   </div>
 }
 
-const guestViews = [
-  ['overview', 'Overview', LayoutGrid], ['expenses', 'Expenses', ReceiptText], ['calendar', 'Calendar', CalendarDays],
-  ['balances', 'Balances', Scale], ['activity', 'Activity', History],
-] as const
+function guestLocation() {
+  const params = new URL(location.href).searchParams
+  const view = groupViews.find(item => item === params.get("view")) ?? "overview"
+  return { view, focus: params.get("record") ?? undefined }
+}
+
 const noEdit = () => {}
 
 export function GuestView({ token, close, retry }: { token: string; close: () => void; retry: () => void }) {
   const [data, setData] = useState<AppData>()
   const [error, setError] = useState('')
-  const [view, setView] = useState<GroupView>('overview')
-  const [transaction, setTransaction] = useState<string>()
-  const [roster, showRoster] = useState(false)
+  const [{ view, focus }, setLocation] = useState(guestLocation)
   const cached = useRef<{ revision: string; data: AppData }>(undefined)
   useEffect(() => {
     let active = true
@@ -119,7 +121,6 @@ export function GuestView({ token, close, retry }: { token: string; close: () =>
         if (active) {
           cached.current = undefined
           setData(undefined)
-          showRoster(false)
           setError(issue instanceof Error ? issue.message : 'Could not open this guest link.')
         }
       } finally { running = false }
@@ -135,6 +136,21 @@ export function GuestView({ token, close, retry }: { token: string; close: () =>
       document.removeEventListener('visibilitychange', onFocus)
     }
   }, [token])
+  useEffect(() => {
+    const sync = () => setLocation(guestLocation())
+    window.addEventListener("popstate", sync)
+    return () => window.removeEventListener("popstate", sync)
+  }, [])
+  function go(view: GroupView, focus?: string) {
+    const url = new URL(location.href)
+    if (view === "overview") url.searchParams.delete("view")
+    else url.searchParams.set("view", view)
+    if (focus) url.searchParams.set("record", focus)
+    else url.searchParams.delete("record")
+    if (url.href !== location.href) history.pushState(null, "", url)
+    setLocation({ view, focus })
+    window.scrollTo({ top: 0 })
+  }
   const group = data?.groups[0]
   const labels = memberLabels(data?.members ?? [])
   const nameOf = (id: string) => labels.get(id) ?? 'Unknown member'
@@ -142,38 +158,35 @@ export function GuestView({ token, close, retry }: { token: string; close: () =>
   const rows = group && data ? { currency: group.currency, expenses: data.expenses, payments: data.payments,
     nameOf, canEdit: false, editExpense: noEdit, editPayment: noEdit } : undefined
   const pairs = data ? calculateBalances(data.expenses, data.payments) : []
-  return <>
-    <header className="site-header"><div className={`header-inner${group ? '' : ' without-group'}`}>
-      <span className="brand">Tally</span>
-      {group && <nav className="primary-nav admin-nav" aria-label="Group navigation">
-        {guestViews.map(([id, label, Icon]) => <button type="button" key={id} aria-current={view === id ? 'page' : undefined}
-          onClick={() => { setView(id); setTransaction(undefined); window.scrollTo(0, 0) }}><Icon size={18} aria-hidden="true" />{label}</button>)}
-      </nav>}
-      <button className="text-button header-admin guest-exit" type="button" onClick={close}>Exit guest view</button>
+  return <div className={group ? "workspace" : undefined}>
+    <header className="site-header"><div className="header-inner without-group">
+      <span className="brand"><span className="brand-mark" aria-hidden="true"><i /><i /><i /><i /></span>Tally</span>
+      {group && <div className="workspace-crumb"><span>Guest view</span><span aria-hidden="true">/</span><strong>{group.name}</strong></div>}
+      <button className="text-button guest-exit" type="button" onClick={close}>Exit guest view</button>
     </div></header>
-    <main className={`layout${group ? ' ledger-layout' : ''}`}>
+    {group && <aside className="workspace-rail"><span className="brand"><span className="brand-mark" aria-hidden="true"><i /><i /><i /><i /></span>Tally</span>
+      <GroupNavigation view={view} go={go} /></aside>}
+    <main className={group ? "layout ledger-layout" : "layout"}>
       {error ? <div className="form-stack"><p className="notice danger" role="alert">{error}</p>
         <button className="text-button" onClick={retry}>Use another link</button></div>
         : !group || !rows || !data ? <p className="loading" role="status">Checking guest access&hellip;</p> : <>
           <section className="group-heading"><div className="group-text">
             <h1>{group.name}</h1>
             {group.description && <p>{group.description}</p>}
-            <div className="group-actions">
-              <span className="read-only"><Eye size={15} aria-hidden="true" />View only</span>
-              <button className="text-button" onClick={() => showRoster(true)}>Group members</button>
+            <div className="group-actions"><span className="read-only"><Eye size={15} aria-hidden="true" />View only</span>
+              <span className="group-meta">{data.members.filter(member => member.active).length} active &middot; {group.currency}</span>
             </div>
           </div></section>
-          {view === 'overview' && <Overview {...rows} pairs={pairs} members={data.members} settle={noEdit} events={data.activity}
-            openExpenses={() => { setTransaction(undefined); setView('expenses') }}
-            openTransaction={id => { setTransaction(id); setView('expenses') }} />}
-          {view === 'expenses' && <Expenses {...rows} memberId="" fullNameOf={fullNameOf} canExport={false} focusTransaction={transaction} />}
-          {view === 'calendar' && <ExpenseCalendar {...rows} memberId="" />}
-          {view === 'balances' && <Balances {...rows} pairs={pairs} settle={noEdit} />}
-          {view === 'activity' && <ActivityFeed events={data.activity} />}
+          {view === "overview" && <GroupHome {...rows} pairs={pairs} members={data.members} memberId="" events={data.activity} go={go} />}
+          {(view === "expenses" || view === "calendar") && <Expenses key={focus} {...rows} memberId="" members={data.members}
+            fullNameOf={fullNameOf} canExport={false} focusTransaction={focus} events={data.activity} calendar={view === "calendar"}
+            changeView={calendar => go(calendar ? "calendar" : "expenses")}
+            renderCalendar={(expenses, payments) => <ExpenseCalendar {...rows} expenses={expenses} payments={payments} events={data.activity} memberId="" />} />}
+          {view === "balances" && <Balances key={focus} {...rows} pairs={pairs} members={data.members} settle={noEdit} focus={focus} />}
+          {view === "people" && <People {...rows} pairs={pairs} members={data.members} ownerId={group.ownerMemberId ?? ""}
+            memberId="" focus={focus} select={id => go("people", id)} seeBalances={id => go("balances", "member:" + id)} />}
+          {view === "activity" && <ActivityFeed events={data.activity} />}
         </>}
     </main>
-    {roster && data && <Sheet title="Group members" close={() => showRoster(false)}>
-      <MemberRoster members={data.members} nameOf={nameOf} />
-    </Sheet>}
-  </>
+  </div>
 }

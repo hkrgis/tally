@@ -21,10 +21,10 @@ const cloudIdPattern = /^f-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0
 export type Account = { id: string; email: string; name: string; verified: boolean; photo?: string }
 export type GroupSummary = {
   name: string; currency: string; memberCount: number; lastActivityAt: string;
-  ownerMemberId: string; createdOn?: string;
+  ownerMemberId: string; createdOn?: string; description?: string;
 }
 export type GroupHead = {
-  id: string; owner: string; revision: string; partCount: number; summary?: GroupSummary; storage?: 'account';
+  id: string; owner: string; revision: string; partCount: number; summary?: GroupSummary; storage?: 'account'; receiptVersion?: 1;
   createdAt?: string; archivedAt?: string; archivedBy?: string; restoredAt?: string; legacyName?: string;
 }
 export type AccountLedger = GroupHead & { data: AppData; memberId: string }
@@ -98,6 +98,7 @@ export function accountError(error: unknown) {
     case 'auth/unauthorized-continue-uri': return 'Add this site to Authorised domains in Firebase Authentication.'
     case 'auth/too-many-requests': return 'Too many attempts. Try again later.'
     case 'auth/network-request-failed': return 'Could not reach Firebase. Check your connection and try again.'
+    case 'unavailable': return 'Firebase is unavailable. Check your connection and try again.'
     case 'permission-denied': return 'Your account does not have access to this group or action.'
     default: return error instanceof Error ? error.message : 'Something went wrong. Try again.'
   }
@@ -173,16 +174,17 @@ export async function isPlatformAdmin() {
 
 function readSummary(value: unknown): GroupSummary | undefined {
   if (!value || typeof value !== 'object') return undefined
-  const { name, currency, memberCount, lastActivityAt, ownerMemberId, createdOn } = value as Partial<GroupSummary>
+  const { name, currency, memberCount, lastActivityAt, ownerMemberId, createdOn, description } = value as Partial<GroupSummary>
   if (typeof name !== 'string' || typeof currency !== 'string' || !/^[A-Z]{3}$/.test(currency) ||
     typeof memberCount !== 'number' || !Number.isSafeInteger(memberCount) || memberCount < 0 ||
     typeof ownerMemberId !== 'string') return undefined
   const validDate = (stamp: unknown) => typeof stamp === 'string' && Number.isFinite(Date.parse(stamp)) ? stamp : undefined
-  return { name, currency, memberCount, ownerMemberId, lastActivityAt: validDate(lastActivityAt) ?? '', createdOn: validDate(createdOn) }
+  return { name, currency, memberCount, ownerMemberId, lastActivityAt: validDate(lastActivityAt) ?? '', createdOn: validDate(createdOn),
+    ...(typeof description === 'string' && description.length <= 240 ? { description } : {}) }
 }
 
 function consistentHead(id: string, value: Record<string, unknown>): GroupHead {
-  const { owner, revision, partCount, summary, createdAt, archivedAt, archivedBy, restoredAt, legacyName, storage } = value
+  const { owner, revision, partCount, summary, createdAt, archivedAt, archivedBy, restoredAt, legacyName, storage, receiptVersion } = value
   if (typeof owner !== 'string' || typeof revision !== 'string' || typeof partCount !== 'number' ||
       !Number.isInteger(partCount) || partCount < 1 || partCount > maxParts) throw new Error('The stored group is incomplete.')
   function date(field: unknown) {
@@ -190,15 +192,17 @@ function consistentHead(id: string, value: Record<string, unknown>): GroupHead {
       ? (field.toDate() as Date).toISOString() : undefined
   }
   return { id, owner, revision, partCount, summary: readSummary(summary), storage: storage === 'account' ? storage : undefined,
+    ...(receiptVersion === 1 ? { receiptVersion } : {}),
     createdAt: date(createdAt), archivedAt: date(archivedAt), restoredAt: date(restoredAt), archivedBy: typeof archivedBy === 'string' ? archivedBy : undefined, legacyName: typeof legacyName === 'string' ? legacyName : undefined }
 }
 
-export function summariseGroup(data: AppData): GroupSummary {
+export function summariseGroup(data: AppData, includeDescription = false): GroupSummary {
   const group = data.groups[0]
   const createdOn = data.activity.filter(item => item.entity === 'group' && item.action === 'created')
     .reduce((oldest, item) => !oldest || item.at < oldest ? item.at : oldest, '')
   return {
     ...(createdOn ? { createdOn } : {}),
+    ...(includeDescription && group.description ? { description: group.description } : {}),
     name: group.name, currency: group.currency, ownerMemberId: group.ownerMemberId ?? '',
     memberCount: data.members.filter(member => member.active).length,
     lastActivityAt: data.activity.reduce((latest, item) => item.at > latest ? item.at : latest, ''),
@@ -285,7 +289,7 @@ export async function readCloudGroup(id: string): Promise<CloudGroup> {
       return { ...head, data, memberId }
     }
     const entry = parseDirectory({ version: 2, groups: [payload] }).groups[0]
-    if (entry.id !== id || !('format' in entry)) throw new Error('The stored ledger did not match this group.')
+    if (entry.id !== id) throw new Error('The stored ledger did not match this group.')
     return { ...head, entry, memberId }
   }
   throw new Error('The group changed while loading. Try again.')
@@ -310,7 +314,7 @@ export async function saveCloudGroup(account: Account, data: AppData, expectedRe
   if (auth.currentUser?.uid !== account.id) throw new Error('Sign in again to save this group.')
   const group = store.doc(db, 'cloudGroups', id)
   const revision = crypto.randomUUID()
-  const summary = summariseGroup(data)
+  const summary = summariseGroup(data, storage === "account")
   const pairs = calculateBalances(data.expenses, data.payments)
   const balances = Object.fromEntries(data.members.map(member => [member.id, memberBalance(pairs, member.id).net]))
   let savedHead: GroupHead | undefined
@@ -319,8 +323,7 @@ export async function saveCloudGroup(account: Account, data: AppData, expectedRe
     const previous = await transaction.get(group)
     const original = previous.data()
     const head = original ? consistentHead(id, original) : undefined
-    const archivedUpgrade = archived && head?.archivedAt && !head.storage
-    if (head && !archivedUpgrade && (head.owner !== account.id || head.archivedAt || archived)) {
+    if (head && (head.owner !== account.id || head.archivedAt || archived)) {
       throw new Error('Only the owner of an active group can edit it.')
     }
     if (head?.revision !== expectedRevision) throw new StaleDataError('Another edit was saved first. Reopen the group and try again.')
@@ -340,6 +343,8 @@ export async function saveCloudGroup(account: Account, data: AppData, expectedRe
     } : {}
     transaction.set(group, {
       owner, revision, partCount: parts.length, summary, ...(storage ? { storage } : {}), ...archive,
+      // Keep older clients from dropping receipt fields when they rewrite a snapshot.
+      ...(head?.receiptVersion || data.payments.some(payment => payment.receipt) ? { receiptVersion: 1 } : {}),
       ...(original?.restoredAt ? { restoredAt: original.restoredAt } : {}),
       createdAt: original ? original.createdAt ?? null : store.serverTimestamp(),
     })
