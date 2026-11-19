@@ -1,5 +1,8 @@
 import { memberBalance, calculateBalances } from './money'
-import type { AppData } from './model'
+import { prepareInvite, prepareRosterInviteRevocation, type InviteDraft } from './memberInvites'
+import { parseData, type AppData } from './model'
+import { emailKey, guestParts, maxParts, newToken, snapshotParts } from './guestData'
+import { writeGuestShare, type GuestShare } from './guestStore'
 import { StaleDataError } from './storage'
 import { parseDirectory, type GroupEntry } from './vault'
 
@@ -13,20 +16,19 @@ const config = {
 }
 export const firebaseConfigured = emulator || Object.values(config).every(Boolean)
 export const accountPasswordLength = 8
-const partSize = 500_000
-const maxParts = 12
 const cloudIdPattern = /^f-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/
 
-export type Account = { id: string; email: string; name: string; verified: boolean }
+export type Account = { id: string; email: string; name: string; verified: boolean; photo?: string }
 export type GroupSummary = {
   name: string; currency: string; memberCount: number; lastActivityAt: string;
   ownerMemberId: string; createdOn?: string;
 }
 export type GroupHead = {
-  id: string; owner: string; revision: string; partCount: number; summary?: GroupSummary;
+  id: string; owner: string; revision: string; partCount: number; summary?: GroupSummary; storage?: 'account';
   createdAt?: string; archivedAt?: string; archivedBy?: string; restoredAt?: string; legacyName?: string;
 }
-export type CloudGroup = GroupHead & { entry: GroupEntry; memberId: string }
+export type AccountLedger = GroupHead & { data: AppData; memberId: string }
+export type CloudGroup = AccountLedger | (GroupHead & { entry: GroupEntry; memberId: string })
 export type GroupRole = 'owned' | 'joined'
 export type AccountGroup = GroupHead & { name: string; balance?: number }
 
@@ -50,28 +52,37 @@ async function initialise() {
 }
 
 let services: ReturnType<typeof initialise> | undefined
-function firebase() {
+export function firebase() {
   return services ??= initialise().catch(error => { services = undefined; throw error })
 }
 
 export async function observeAccount(onChange: (account: Account | null) => void) {
   const { auth, authApi } = await firebase()
-  return authApi.onIdTokenChanged(auth, user => onChange(user ? {
-    id: user.uid, email: user.email ?? '', name: user.displayName?.trim() ?? '', verified: user.emailVerified,
-  } : null))
+  let sequence = 0
+  const stop = authApi.onIdTokenChanged(auth, user => {
+    const current = ++sequence
+    if (!user) { onChange(null); return }
+    const report = (verified: boolean) => {
+      if (current !== sequence || auth.currentUser !== user) return
+      onChange({ id: user.uid, email: user.email ?? '', name: user.displayName?.trim() ?? '',
+        verified, photo: user.photoURL ?? undefined })
+    }
+    void user.getIdTokenResult().then(result => report(result.claims.email_verified === true)).catch(() => report(false))
+  })
+  return () => { sequence++; stop() }
 }
 
 function returnSettings() {
   return { url: new URL(window.location.pathname, window.location.origin).href }
 }
 
-function codeOf(error: unknown) {
+export function codeOf(error: unknown) {
   return typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined
 }
 
 export function accountError(error: unknown) {
   switch (codeOf(error)) {
-    case 'auth/email-already-in-use': return 'Use Log In or Forgot password to continue with this email.'
+    case 'auth/email-already-in-use': return 'Log in or reset your password to continue with this email.'
     case 'auth/invalid-email': return 'Enter a valid email address.'
     case 'auth/invalid-credential':
     case 'auth/invalid-login-credentials':
@@ -81,13 +92,13 @@ export function accountError(error: unknown) {
     case 'auth/password-does-not-meet-requirements': return `Use a password with at least ${accountPasswordLength} characters.`
     case 'auth/operation-not-allowed': return 'Enable Email/Password in Firebase Authentication.'
     case 'auth/popup-blocked': return 'Allow pop-ups for Tally, then try Google sign-in again.'
-    case 'auth/popup-closed-by-user': return 'Google sign-in was canceled. Try again or sign in with your email.'
+    case 'auth/popup-closed-by-user': return 'Google sign-in was cancelled. Try again or sign in with your email.'
     case 'auth/account-exists-with-different-credential': return 'This email already has an account. Sign in with the original method to open your groups.'
-    case 'auth/unauthorized-domain': return 'This siteâ€™s domain must be authorized in Firebase to use Google sign-in.'
-    case 'auth/unauthorized-continue-uri': return 'Add this siteâ€™s domain to Firebase Authenticationâ€™s authorised domains.'
+    case 'auth/unauthorized-domain': return 'Add this site to Authorised domains in Firebase Authentication to use Google sign-in.'
+    case 'auth/unauthorized-continue-uri': return 'Add this site to Authorised domains in Firebase Authentication.'
     case 'auth/too-many-requests': return 'Too many attempts. Try again later.'
     case 'auth/network-request-failed': return 'Could not reach Firebase. Check your connection and try again.'
-    case 'permission-denied': return 'This group or action is unavailable to your account. Ask the organiser for a new invitation if needed.'
+    case 'permission-denied': return 'Your account does not have access to this group or action.'
     default: return error instanceof Error ? error.message : 'Something went wrong. Try again.'
   }
 }
@@ -171,14 +182,14 @@ function readSummary(value: unknown): GroupSummary | undefined {
 }
 
 function consistentHead(id: string, value: Record<string, unknown>): GroupHead {
-  const { owner, revision, partCount, summary, createdAt, archivedAt, archivedBy, restoredAt, legacyName } = value
+  const { owner, revision, partCount, summary, createdAt, archivedAt, archivedBy, restoredAt, legacyName, storage } = value
   if (typeof owner !== 'string' || typeof revision !== 'string' || typeof partCount !== 'number' ||
       !Number.isInteger(partCount) || partCount < 1 || partCount > maxParts) throw new Error('The stored group is incomplete.')
   function date(field: unknown) {
     return field && typeof field === 'object' && 'toDate' in field && typeof field.toDate === 'function'
       ? (field.toDate() as Date).toISOString() : undefined
   }
-  return { id, owner, revision, partCount, summary: readSummary(summary),
+  return { id, owner, revision, partCount, summary: readSummary(summary), storage: storage === 'account' ? storage : undefined,
     createdAt: date(createdAt), archivedAt: date(archivedAt), restoredAt: date(restoredAt), archivedBy: typeof archivedBy === 'string' ? archivedBy : undefined, legacyName: typeof legacyName === 'string' ? legacyName : undefined }
 }
 
@@ -259,16 +270,23 @@ export async function readCloudGroup(id: string): Promise<CloudGroup> {
       if (attempt > 0) throw new Error('Could not load this group. Check your access or try again.')
       continue
     }
-    const payload = parts.map(part => part!.payload).join('')
-    const entry = parseDirectory({ version: 2, groups: [JSON.parse(payload)] }).groups[0]
-    if (entry.id !== id || !('format' in entry)) throw new Error('The stored group did not match this invite.')
     let memberId = head.owner === uid ? head.summary?.ownerMemberId ?? '' : ''
     if (uid && head.owner !== uid && !head.archivedAt) {
       const link = await store.getDocFromServer(store.doc(group, 'members', uid))
       memberId = link.data()?.memberId ?? ''
     }
     const latest = await readGroupHead(id)
-    if (latest.revision === head.revision && latest.archivedAt === head.archivedAt) return { ...head, entry, memberId }
+    if (latest.revision !== head.revision || latest.archivedAt !== head.archivedAt) continue
+    const payload: unknown = JSON.parse(parts.map(part => part!.payload).join(''))
+    if (head.storage === 'account') {
+      const data = parseData(payload)
+      if (data.groups.length !== 1 || data.groups[0].id !== id) throw new Error('The stored ledger did not match this group.')
+      data.groups[0].archived = Boolean(head.archivedAt)
+      return { ...head, data, memberId }
+    }
+    const entry = parseDirectory({ version: 2, groups: [payload] }).groups[0]
+    if (entry.id !== id || !('format' in entry)) throw new Error('The stored ledger did not match this group.')
+    return { ...head, entry, memberId }
   }
   throw new Error('The group changed while loading. Try again.')
 }
@@ -282,48 +300,77 @@ export async function watchGroupHead(id: string, change: (head: GroupHead) => vo
   }, lost)
 }
 
-export async function saveCloudGroup(account: Account, data: AppData, entry: GroupEntry, expectedRevision?: string): Promise<CloudGroup> {
+export async function saveCloudGroup(account: Account, data: AppData, expectedRevision?: string, removedMemberId?: string, encrypted?: GroupEntry, invite?: InviteDraft): Promise<AccountLedger> {
   if (!account.verified) throw new Error('Verify your email before saving groups.')
-  if (!isCloudGroup(entry.id) || !('format' in entry)) throw new Error('Only account groups can be saved to Firebase.')
-  const payload = JSON.stringify(entry)
-  const count = Math.ceil(payload.length / partSize)
-  if (count > maxParts) throw new Error('This group is too large to save. Remove some photos and try again.')
+  const { id, archived } = data.groups[0]
+  if (!isCloudGroup(id)) throw new Error('Only account groups can be saved to Firebase.')
+  const parts = snapshotParts(encrypted ?? data)
+  const storage = encrypted ? undefined : 'account' as const
   const { auth, db, store } = await firebase()
   if (auth.currentUser?.uid !== account.id) throw new Error('Sign in again to save this group.')
-  const group = store.doc(db, 'cloudGroups', entry.id)
-  const index = store.doc(db, 'accounts', account.id, 'groups', entry.id)
+  const group = store.doc(db, 'cloudGroups', id)
   const revision = crypto.randomUUID()
-  const owner = account.id
-  const archived = data.groups[0].archived
   const summary = summariseGroup(data)
   const pairs = calculateBalances(data.expenses, data.payments)
   const balances = Object.fromEntries(data.members.map(member => [member.id, memberBalance(pairs, member.id).net]))
+  let savedHead: GroupHead | undefined
+
   await store.runTransaction(db, async transaction => {
     const previous = await transaction.get(group)
     const original = previous.data()
-    const head = original ? consistentHead(entry.id, original) : undefined
-    if (head && (head.owner !== owner || head.archivedAt || archived)) throw new Error('Only the owner of an active group can edit it.')
+    const head = original ? consistentHead(id, original) : undefined
+    const archivedUpgrade = archived && head?.archivedAt && !head.storage
+    if (head && !archivedUpgrade && (head.owner !== account.id || head.archivedAt || archived)) {
+      throw new Error('Only the owner of an active group can edit it.')
+    }
     if (head?.revision !== expectedRevision) throw new StaleDataError('Another edit was saved first. Reopen the group and try again.')
-    const archive = archived ? { archivedAt: store.serverTimestamp(), archivedBy: owner } : {}
+
+    const owner = head?.owner ?? account.id
+    const index = store.doc(db, 'accounts', owner, 'groups', id)
+    const assignment = removedMemberId ? store.doc(group, 'assignments', removedMemberId) : undefined
+    const removedUid = assignment ? (await transaction.get(assignment)).data()?.uid : undefined
+    const share = !archived && head ? (await transaction.get(store.doc(db, 'guestConfig', id))).data() as GuestShare | undefined : undefined
+    const revokeInvite = removedMemberId ? await prepareRosterInviteRevocation(transaction, store, db, id, removedMemberId) : undefined
+    const writeInvite = invite ? await prepareInvite(transaction, store, db, id, invite, account) : undefined
+    if (share && share.expiresAt.toMillis() > Date.now()) {
+      writeGuestShare(transaction, store, db, id, share, revision, await guestParts(data, share.token, revision))
+    }
+    const archive = archived ? {
+      archivedAt: original?.archivedAt ?? store.serverTimestamp(), archivedBy: original?.archivedBy ?? account.id,
+    } : {}
     transaction.set(group, {
-      owner, revision, partCount: count, summary, ...archive, ...(original?.restoredAt ? { restoredAt: original.restoredAt } : {}),
+      owner, revision, partCount: parts.length, summary, ...(storage ? { storage } : {}), ...archive,
+      ...(original?.restoredAt ? { restoredAt: original.restoredAt } : {}),
       createdAt: original ? original.createdAt ?? null : store.serverTimestamp(),
     })
     if (!archived) transaction.set(index, {})
     transaction.set(store.doc(group, 'stats', 'current'), { revision, balances })
-    for (let part = 0; part < count; part++) {
-      transaction.set(store.doc(group, 'parts', String(part)), { part, revision, payload: payload.slice(part * partSize, (part + 1) * partSize) })
+    parts.forEach((payload, part) => transaction.set(store.doc(group, 'parts', String(part)), { part, revision, payload }))
+    for (let part = parts.length; part < (head?.partCount ?? 0); part++) transaction.delete(store.doc(group, 'parts', String(part)))
+    if (removedMemberId) {
+      transaction.set(store.doc(group, 'inviteLinks', removedMemberId), { token: '' })
+      if (assignment && typeof removedUid === 'string') {
+        transaction.delete(assignment)
+        transaction.delete(store.doc(group, 'members', removedUid))
+        transaction.delete(store.doc(db, 'accounts', removedUid, 'joined', id))
+      }
     }
-    for (let part = count; part < (head?.partCount ?? 0); part++) transaction.delete(store.doc(group, 'parts', String(part)))
+    revokeInvite?.()
+    writeInvite?.()
+    savedHead = { ...head, id, owner, revision, partCount: parts.length, summary, storage }
   }).catch(async error => {
     const saved = await store.getDocFromServer(group).then(result => result.data()).catch(() => undefined)
-    if (saved?.revision === revision && saved.owner === owner) return
+    if (saved?.revision === revision) {
+      savedHead = consistentHead(id, saved)
+      return
+    }
     if (!expectedRevision && codeOf(error) === 'permission-denied') {
       throw new Error('Firestore blocked group creation. Ask the site administrator to check the deployed Firestore rules.')
     }
     throw error
   })
-  return { id: entry.id, entry, revision, owner, partCount: count, summary, memberId: summary.ownerMemberId }
+  if (!savedHead) throw new Error('Could not confirm that the group was saved.')
+  return { ...savedHead, data, memberId: summary.ownerMemberId }
 }
 
 export async function changeGroupArchive(id: string, archive: boolean, summary?: GroupSummary) {
@@ -342,6 +389,7 @@ export async function changeGroupArchive(id: string, archive: boolean, summary?:
       transaction.update(group, { ...(summary && !head.summary ? { summary } : {}), ...(oldName ? { legacyName: oldName } : {}),
         archivedAt: store.serverTimestamp(), archivedBy: uid })
       transaction.delete(index)
+      transaction.delete(store.doc(db, 'guestConfig', id))
     } else {
       transaction.update(group, { archivedAt: store.deleteField(), archivedBy: store.deleteField(), restoredAt: store.serverTimestamp() })
       transaction.set(index, {})
@@ -349,21 +397,43 @@ export async function changeGroupArchive(id: string, archive: boolean, summary?:
   })
 }
 
-export async function createGroupInvitation(id: string, memberId: string) {
+export async function listLinkedMembers(id: string) {
+  const { db, store } = await firebase()
+  const entries = await store.getDocsFromServer(store.collection(db, 'cloudGroups', id, 'assignments'))
+  return new Set(entries.docs.map(entry => entry.id))
+}
+
+export async function getGroupInvitation(id: string, memberId: string, regenerate: boolean) {
   const { db, store } = await firebase()
   const group = store.doc(db, 'cloudGroups', id)
-  const assignment = await store.getDocFromServer(store.doc(group, 'assignments', memberId))
-  if (assignment.exists()) throw new Error('This member already has a linked account.')
-  const token = Array.from(crypto.getRandomValues(new Uint8Array(32)), byte => byte.toString(16).padStart(2, '0')).join('')
-  await store.setDoc(store.doc(group, 'invites', token), { memberId })
-  return token
+  const token = newToken()
+  return store.runTransaction(db, async transaction => {
+    const assignment = await transaction.get(store.doc(group, 'assignments', memberId))
+    if (assignment.exists()) throw new Error('This member already has a linked account.')
+    const link = store.doc(group, 'inviteLinks', memberId)
+    const previous = (await transaction.get(link)).data()?.token
+    if (previous) {
+      const ticket = (await transaction.get(store.doc(group, 'invites', previous))).data()
+      if (ticket?.target) {
+        const targeted = (await transaction.get(store.doc(group, 'targetInvites', ticket.target))).data()
+        if (targeted?.status === 'pending' && targeted.expiresAt.toMillis() > Date.now()) {
+          throw new Error('This member has an email invitation. Manage it under Member invitations.')
+        }
+      } else if (!regenerate) return String(previous)
+    }
+    transaction.set(store.doc(group, 'invites', token), { memberId })
+    transaction.set(link, { token })
+    return token
+  })
 }
 
 export async function joinCloudGroup(id: string, token: string) {
   if (!isCloudGroup(id) || !/^[a-f0-9]{64}$/.test(token)) throw new Error('Ask the organiser for a new member invitation.')
   const { auth, db, store } = await firebase()
-  const uid = auth.currentUser?.uid
-  if (!uid) throw new Error('Log in to join this group.')
+  const user = auth.currentUser
+  if (!user?.email || !user.emailVerified) throw new Error('Verify your email to join this group.')
+  const uid = user.uid
+  const key = await emailKey(user.email)
   const group = store.doc(db, 'cloudGroups', id)
   await store.runTransaction(db, async transaction => {
     const invite = store.doc(group, 'invites', token)
@@ -372,8 +442,18 @@ export async function joinCloudGroup(id: string, token: string) {
     if (!record) throw new Error('This invitation is unavailable. Ask the organiser for a new one.')
     if (record.claimedBy === uid) return
     transaction.update(invite, { claimedBy: uid })
-    transaction.set(store.doc(group, 'members', uid), { memberId: record.memberId, token })
+    transaction.set(store.doc(group, 'members', uid), { memberId: record.memberId, token, emailKey: key })
+    transaction.set(store.doc(group, 'linkedEmails', key), { uid })
+    if (record.target) {
+      transaction.update(store.doc(group, 'targetInvites', key), { status: 'accepted' })
+      transaction.update(store.doc(db, 'memberInboxes', key, 'invitations', id), { status: 'accepted' })
+    }
     transaction.set(store.doc(group, 'assignments', record.memberId), { uid })
     transaction.set(store.doc(db, 'accounts', uid, 'joined', id), {})
+  }).catch(error => {
+    if (codeOf(error) === 'permission-denied') {
+      throw new Error('This invitation may have expired, been revoked or been issued to another email. Check which account you are using.')
+    }
+    throw error
   })
 }

@@ -26,18 +26,23 @@ export const OwedIcon = () => <ArrowDownLeft size={17} aria-hidden="true" />
 const tones = ['lavender', 'peach', 'green', 'blue', 'neutral']
 export const nameInitial = (name: string) => (Array.from(firstName(name))[0] ?? '').toUpperCase()
 
-export function MemberRoster({ members, nameOf, edit, addSelf }: {
-  members: Member[]; nameOf: (id: string) => string; edit?: (member?: Member) => void; addSelf?: () => void;
+export function MemberRoster({ members, nameOf, ownerMemberId, edit, remove, add, addSelf }: {
+  members: Member[]; nameOf: (id: string) => string; ownerMemberId?: string;
+  edit?: (member?: Member) => void; remove?: (member: Member) => void; add?: () => void; addSelf?: () => void;
 }) {
   return <div className="form-stack">
     {edit && <div className="inline-actions">
-      <button className="button primary" onClick={() => edit()}><Plus size={17} />Add member</button>
+      <button className="button primary" onClick={add ?? (() => edit())}><Plus size={17} />Add members</button>
       {addSelf && <button className="text-button" onClick={addSelf}>Add myself</button>}
     </div>}
     {members.length ? <ul className="roster-list">{members.map((member, index) => <li className="roster-row" key={member.id}>
       <Avatar member={member} index={index} />
       <span><strong>{nameOf(member.id)}</strong>{!member.active && <small>Inactive</small>}</span>
-      {edit && <button className="text-button" aria-label={`Edit ${nameOf(member.id)}`} onClick={() => edit(member)}>Edit</button>}
+      {edit && <div className="inline-actions">
+        <button className="text-button" aria-label={`Edit ${nameOf(member.id)}`} onClick={() => edit(member)}>Edit</button>
+        {remove && member.id !== ownerMemberId && <button className="text-button negative" aria-label={`Remove ${nameOf(member.id)}`}
+          onClick={() => remove(member)}>Remove</button>}
+      </div>}
     </li>)}</ul> : <p className="muted">No members yet.</p>}
   </div>
 }

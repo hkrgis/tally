@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { deleteApp, initializeApp } from 'firebase/app'
 import {
   applyActionCode, connectAuthEmulator, createUserWithEmailAndPassword, getAuth, reload, sendEmailVerification,
 } from 'firebase/auth'
 import {
-  collection, connectFirestoreEmulator, deleteField, doc, getDoc, getDocs, getFirestore,
+  collection, connectFirestoreEmulator, deleteDoc, deleteField, doc, getDoc, getDocs, getFirestore, limit, query, Timestamp,
   serverTimestamp, setDoc, updateDoc, writeBatch,
 } from 'firebase/firestore/lite'
 
@@ -76,9 +77,9 @@ try {
   const ownerIndex = db => doc(db, 'accounts', ownerUser.uid, 'groups', id)
   const mapping = db => doc(db, 'platformAdmin', 'identity')
   const summary = { name: 'Group A', currency: 'AUD', memberCount: 2, lastActivityAt: '', ownerMemberId: 'owner' }
-  const first = { owner: ownerUser.uid, revision: crypto.randomUUID(), partCount: 2, summary, createdAt: serverTimestamp() }
+  const first = { owner: ownerUser.uid, revision: crypto.randomUUID(), partCount: 2, summary, storage: 'account', createdAt: serverTimestamp() }
   const balances = { owner: 300, guest: -300 }
-  const storedPart = { part: 0, revision: first.revision, payload: 'encrypted-test-payload' }
+  const storedPart = { part: 0, revision: first.revision, payload: 'account-protected-test-payload' }
   await denied(setDoc(group(unverified.db), first))
   assert.equal((await getDoc(group(owner.db))).exists(), false)
   const batch = writeBatch(owner.db)
@@ -108,12 +109,26 @@ try {
   await denied(updateDoc(group(admin.db), { owner: adminUser.uid }))
   await denied(setDoc(part(owner.db), { ...storedPart, payload: 'replace-without-edit' }))
 
+  const staleToken = crypto.randomUUID().replaceAll('-', '').repeat(2)
   const token = crypto.randomUUID().replaceAll('-', '').repeat(2)
-  const invitation = db => doc(group(db), 'invites', token)
+  const invitation = (db, key = token) => doc(group(db), 'invites', key)
+  const inviteLink = db => doc(group(db), 'inviteLinks', 'guest')
   const membership = db => doc(group(db), 'members', memberUser.uid)
   const assignment = db => doc(group(db), 'assignments', 'guest')
   await denied(setDoc(invitation(outsider.db), { memberId: 'guest' }))
-  await setDoc(invitation(owner.db), { memberId: 'guest' })
+  await denied(setDoc(invitation(owner.db), { memberId: 'guest' }))
+  await denied(getDoc(inviteLink(member.db)))
+  const invite = writeBatch(owner.db)
+  invite.set(invitation(owner.db, staleToken), { memberId: 'guest' })
+  invite.set(inviteLink(owner.db), { token: staleToken })
+  await invite.commit()
+  assert.equal((await getDoc(invitation(member.db, staleToken))).data().memberId, 'guest')
+  const rotate = writeBatch(owner.db)
+  rotate.set(invitation(owner.db), { memberId: 'guest' })
+  rotate.set(inviteLink(owner.db), { token })
+  await rotate.commit()
+  await denied(getDoc(invitation(member.db, staleToken)))
+  await denied(updateDoc(invitation(member.db, staleToken), { claimedBy: memberUser.uid }))
   await denied(getDoc(invitation(guest.db)))
   await denied(getDocs(collection(group(outsider.db), 'invites')))
   await denied(setDoc(membership(member.db), { memberId: 'guest', token }))
@@ -175,6 +190,33 @@ try {
   assert.deepEqual((await getDoc(part(member.db))).data(), nextPart)
   await denied(getDoc(part(outsider.db)))
   await denied(getDoc(part(admin.db)))
+  const revokedRevision = crypto.randomUUID()
+  const stillPreserved = { ...nextPart, revision: revokedRevision }
+  const removeLinkOnly = writeBatch(owner.db)
+  removeLinkOnly.delete(membership(owner.db))
+  await denied(removeLinkOnly.commit())
+  await denied(setDoc(inviteLink(owner.db), { token: '' }))
+  const revoke = writeBatch(owner.db)
+  revoke.update(group(owner.db), { revision: revokedRevision })
+  revoke.set(part(owner.db), stillPreserved)
+  revoke.set(stats(owner.db), { revision: revokedRevision, balances })
+  revoke.set(inviteLink(owner.db), { token: '' })
+  revoke.delete(membership(owner.db))
+  revoke.delete(assignment(owner.db))
+  revoke.delete(joined(owner.db))
+  await revoke.commit()
+  assert.deepEqual((await getDoc(part(owner.db))).data(), stillPreserved)
+  assert.equal((await getDocs(collection(member.db, 'accounts', memberUser.uid, 'joined'))).size, 0)
+  await denied(getDoc(group(member.db)))
+  await denied(getDoc(part(member.db)))
+  await denied(getDoc(invitation(member.db)))
+  await denied(getDoc(invitation(member.db, staleToken)))
+  const downgrade = writeBatch(owner.db)
+  const downgradedRevision = crypto.randomUUID()
+  downgrade.update(group(owner.db), { revision: downgradedRevision, storage: deleteField() })
+  downgrade.set(part(owner.db), { ...stillPreserved, revision: downgradedRevision })
+  downgrade.set(stats(owner.db), { revision: downgradedRevision, balances })
+  await denied(downgrade.commit())
   const adminArchive = writeBatch(admin.db)
   adminArchive.update(group(admin.db), { archivedAt: serverTimestamp(), archivedBy: adminUser.uid })
   adminArchive.delete(ownerIndex(admin.db))
@@ -182,7 +224,7 @@ try {
   const deletion = writeBatch(admin.db)
   deletion.delete(group(admin.db))
   await denied(deletion.commit())
-  assert.deepEqual((await getDoc(part(admin.db))).data(), nextPart)
+  assert.deepEqual((await getDoc(part(admin.db))).data(), stillPreserved)
   const legacyId = `f-${crypto.randomUUID()}`
   const legacyRevision = crypto.randomUUID()
   const legacyPath = `cloudGroups/${legacyId}`
@@ -204,6 +246,20 @@ try {
   assert.equal((await getDoc(doc(admin.db, legacyPath))).data().legacyName, 'Earlier group')
   assert.equal((await getDoc(doc(admin.db, legacyPath, 'parts', '0'))).data().payload, 'old-encrypted-snapshot')
 
+  const upgradedRevision = crypto.randomUUID()
+  const legacyUpgrade = writeBatch(admin.db)
+  legacyUpgrade.update(doc(admin.db, legacyPath), {
+    revision: upgradedRevision, storage: 'account', createdAt: null, summary, legacyName: deleteField(),
+  })
+  legacyUpgrade.set(doc(admin.db, legacyPath, 'stats', 'current'), { revision: upgradedRevision, balances })
+  legacyUpgrade.set(doc(admin.db, legacyPath, 'parts', '0'), {
+    part: 0, revision: upgradedRevision, payload: 'converted-archive',
+  })
+  await legacyUpgrade.commit()
+  assert.equal((await getDoc(doc(admin.db, legacyPath))).data().archivedBy, adminUser.uid)
+  await denied(getDoc(doc(owner.db, legacyPath, 'parts', '0')))
+  assert.equal((await getDoc(doc(admin.db, legacyPath, 'parts', '0'))).data().payload, 'converted-archive')
+
   const importedId = `f-${crypto.randomUUID()}`
   const imported = db => doc(db, 'cloudGroups', importedId)
   const importedRevision = crypto.randomUUID()
@@ -213,12 +269,125 @@ try {
   })
   importBatch.set(doc(imported(owner.db), 'stats', 'current'), { revision: importedRevision, balances })
   for (let part = 0; part < 12; part++) importBatch.set(doc(imported(owner.db), 'parts', String(part)), {
-    part, revision: importedRevision, payload: 'encrypted-import',
+    part, revision: importedRevision, payload: 'account-protected-import',
   })
   await importBatch.commit()
   await denied(getDoc(imported(owner.db)))
-  assert.equal((await getDoc(doc(imported(admin.db), 'parts', '11'))).data().payload, 'encrypted-import')
-  console.log('Firestore checks passed for authentication, invitations, ownership, admin mapping, archival, restoration and protected snapshots.')
+  assert.equal((await getDoc(doc(imported(admin.db), 'parts', '11'))).data().payload, 'account-protected-import')
+  const shareId = 'f-' + crypto.randomUUID()
+  const shareGroup = db => doc(db, 'cloudGroups', shareId)
+  const shareRevision = crypto.randomUUID()
+  const support = writeBatch(owner.db)
+  support.set(shareGroup(owner.db), { ...first, revision: shareRevision, partCount: 1 })
+  support.set(doc(owner.db, 'accounts', ownerUser.uid, 'groups', shareId), {})
+  support.set(doc(shareGroup(owner.db), 'stats', 'current'), { revision: shareRevision, balances })
+  support.set(doc(shareGroup(owner.db), 'parts', '0'), { part: 0, revision: shareRevision, payload: 'private ledger' })
+  await support.commit()
+
+  const guestToken = 'b'.repeat(64)
+  const guestLink = (db, token = guestToken) => doc(db, 'guestShares', token)
+  const guestConfig = db => doc(db, 'guestConfig', shareId)
+  const guestBody = { part: 0, revision: shareRevision, payload: 'encrypted guest projection' }
+  const expiry = Timestamp.fromMillis(Date.now() + 86_400_000)
+  async function publish(token) {
+    const transaction = writeBatch(owner.db)
+    transaction.set(guestConfig(owner.db), { token, expiresAt: expiry })
+    transaction.set(guestLink(owner.db, token), { id: shareId, partCount: 1, revision: shareRevision, expiresAt: expiry })
+    transaction.set(doc(guestLink(owner.db, token), 'parts', '0'), guestBody)
+    await transaction.commit()
+  }
+  await publish(guestToken)
+  assert.deepEqual((await getDoc(doc(guestLink(guest.db), 'parts', '0'))).data(), guestBody)
+  await denied(getDocs(collection(guest.db, 'guestShares')))
+  await denied(getDocs(collection(guestLink(guest.db), 'parts')))
+  await denied(getDoc(guestConfig(guest.db)))
+  await denied(getDoc(shareGroup(guest.db)))
+  await denied(getDoc(doc(shareGroup(guest.db), 'parts', '0')))
+  await denied(updateDoc(guestLink(guest.db), { id: id }))
+  await denied(setDoc(doc(guestLink(guest.db), 'parts', '0'), guestBody))
+  await denied(deleteDoc(guestConfig(outsider.db)))
+  await denied(getDoc(guestLink(guest.db, '9'.repeat(64))))
+  const rotated = 'd'.repeat(64)
+  await publish(rotated)
+  await denied(getDoc(guestLink(guest.db)))
+  await denied(getDoc(doc(guestLink(guest.db), 'parts', '0')))
+  assert.equal((await getDoc(guestLink(guest.db, rotated))).data().id, shareId)
+  await deleteDoc(guestConfig(owner.db))
+  await denied(getDoc(guestLink(guest.db, rotated)))
+  await publish(rotated)
+  const expired = new Date(Date.now() - 1000).toISOString()
+  await seed('guestConfig/' + shareId, { token: { stringValue: rotated }, expiresAt: { timestampValue: expired } })
+  await seed('guestShares/' + rotated, {
+    id: { stringValue: shareId }, revision: { stringValue: shareRevision }, partCount: { integerValue: '1' }, expiresAt: { timestampValue: expired },
+  })
+  await denied(getDoc(guestLink(guest.db, rotated)))
+  await publish(rotated)
+
+  const digest = createHash('sha256').update(memberUser.email.toLowerCase()).digest('hex')
+  const profile = { uid: memberUser.uid, name: 'Riley Example', searchName: 'riley example', email: memberUser.email, photo: '' }
+  const directory = db => doc(db, 'discovery', digest)
+  const nameIndex = db => collection(db, 'discoveryNames', 'ril', 'profiles')
+  await denied(setDoc(directory(outsider.db), profile))
+  await setDoc(directory(member.db), profile)
+  await setDoc(doc(nameIndex(member.db), digest), profile)
+  await denied(getDoc(directory(guest.db)))
+  await denied(getDocs(collection(owner.db, 'discovery')))
+  await denied(getDocs(nameIndex(owner.db)))
+  assert.equal((await getDocs(query(nameIndex(owner.db), limit(8)))).size, 1)
+  assert.equal((await getDoc(directory(owner.db))).data().name, profile.name)
+  await deleteDoc(directory(member.db))
+  await deleteDoc(doc(nameIndex(member.db), digest))
+  assert.equal((await getDoc(directory(owner.db))).exists(), false)
+
+  const target = db => doc(shareGroup(db), 'targetInvites', digest)
+  const inbox = db => doc(db, 'memberInboxes', digest, 'invitations', shareId)
+  const targetedLink = db => doc(shareGroup(db), 'inviteLinks', 'invitee')
+  const privateToken = 'e'.repeat(64)
+  const ticket = (db, token = privateToken) => doc(shareGroup(db), 'invites', token)
+  const subject = { email: memberUser.email, groupName: 'Group A', memberId: 'invitee', expiresAt: expiry, status: 'pending' }
+  async function issue(token) {
+    const transaction = writeBatch(owner.db)
+    transaction.set(target(owner.db), { ...subject, token })
+    transaction.set(inbox(owner.db), { token, status: 'pending' })
+    transaction.set(ticket(owner.db, token), { memberId: subject.memberId, target: digest })
+    transaction.set(targetedLink(owner.db), { token })
+    return transaction.commit()
+  }
+  await issue(privateToken)
+  await denied(issue('f'.repeat(64)))
+  await denied(getDoc(inbox(outsider.db)))
+  await denied(getDoc(ticket(guest.db)))
+  await denied(getDoc(ticket(outsider.db)))
+  await denied(getDoc(target(outsider.db)))
+  assert.equal((await getDoc(inbox(member.db))).data().status, 'pending')
+  assert.equal((await getDoc(ticket(member.db))).data().memberId, subject.memberId)
+  const revokeTarget = writeBatch(owner.db)
+  revokeTarget.update(target(owner.db), { status: 'revoked' })
+  revokeTarget.update(inbox(owner.db), { status: 'revoked' })
+  await revokeTarget.commit()
+  await denied(getDoc(ticket(member.db)))
+  const fresh = 'f'.repeat(64)
+  await issue(fresh)
+  const joinTarget = writeBatch(member.db)
+  joinTarget.update(ticket(member.db, fresh), { claimedBy: memberUser.uid })
+  joinTarget.set(doc(shareGroup(member.db), 'members', memberUser.uid), { memberId: subject.memberId, token: fresh, emailKey: digest })
+  joinTarget.set(doc(shareGroup(member.db), 'linkedEmails', digest), { uid: memberUser.uid })
+  joinTarget.set(doc(shareGroup(member.db), 'assignments', subject.memberId), { uid: memberUser.uid })
+  joinTarget.set(doc(member.db, 'accounts', memberUser.uid, 'joined', shareId), {})
+  joinTarget.update(target(member.db), { status: 'accepted' })
+  joinTarget.update(inbox(member.db), { status: 'accepted' })
+  await joinTarget.commit()
+  assert.equal((await getDoc(inbox(member.db))).data().status, 'accepted')
+  assert.equal((await getDoc(doc(shareGroup(member.db), 'parts', '0'))).data().payload, 'private ledger')
+  await denied(issue('c'.repeat(64)))
+  const archiveShared = writeBatch(owner.db)
+  archiveShared.update(shareGroup(owner.db), { archivedAt: serverTimestamp(), archivedBy: ownerUser.uid })
+  archiveShared.delete(doc(owner.db, 'accounts', ownerUser.uid, 'groups', shareId))
+  archiveShared.delete(guestConfig(owner.db))
+  await archiveShared.commit()
+  await denied(getDoc(guestLink(guest.db, rotated)))
+  await denied(getDoc(target(member.db)))
+  console.log('Firestore checks passed for guest capability reads, invitation identity and lifecycle, access revocation, owner and admin permissions.')
 } finally {
   await Promise.all(applications.map(deleteApp))
 }

@@ -7,7 +7,6 @@ import { methodLabels } from './screens'
 import { Avatar } from './ui'
 import { errorText } from './useLedger'
 import { photoTypes, preparePhoto, prepareProfilePhoto } from './photos'
-import { maxPasswordLength, minPasswordLength } from './vault'
 
 type Field = { label: string; children: ReactNode }
 function Field({ label, children }: Field) {
@@ -64,6 +63,8 @@ const choose = (choices: Choice, id: string, selected: boolean, value: string) =
 }
 const selected = (choices: Choice, id: string) => Object.hasOwn(choices, id)
 
+const defaultPaymentMethod = 'PayID'
+
 function PaymentMethodField({ group, value, setValue }: { group: Group; value: string; setValue: (value: string) => void }) {
   const [adding, setAdding] = useState(false)
   return <>
@@ -96,7 +97,7 @@ export function ExpenseForm({ group, members, nameOf, memberId, expense, occurre
   const [date, setDate] = useState(expense?.date ?? occurrenceDate ?? today())
   const [category, setCategory] = useState<Expense['category']>(expense?.category ?? 'Other')
   const [notes, setNotes] = useState(expense?.notes ?? '')
-  const [paymentMethod, setPaymentMethod] = useState(expense?.paymentMethod ?? '')
+  const [paymentMethod, setPaymentMethod] = useState(expense ? expense.paymentMethod ?? '' : defaultPaymentMethod)
   const [photos, setPhotos] = useState<ExpensePhoto[]>(expense?.photos ?? [])
   const [preparing, setPreparing] = useState(false)
   const [photoError, setPhotoError] = useState('')
@@ -231,7 +232,7 @@ export function PaymentForm({ group, members, nameOf, expenses, payments, pair, 
   const [to, setTo] = useState(payment?.to ?? pair?.to ?? '')
   const [date, setDate] = useState(payment?.date ?? today())
   const [notes, setNotes] = useState(payment?.notes ?? '')
-  const [paymentMethod, setPaymentMethod] = useState(payment?.paymentMethod ?? '')
+  const [paymentMethod, setPaymentMethod] = useState(payment ? payment.paymentMethod ?? '' : defaultPaymentMethod)
   const [amount, setAmount] = useState(payment ? decimal(payment.amount, group.currency) : pair ? decimal(pair.outstanding, group.currency) : '')
   const pairs = calculateBalances(expenses, payments.filter(value => value.id !== payment?.id))
   const outstanding = pairs.find(value => value.from === from && value.to === to)?.outstanding ?? 0
@@ -266,22 +267,17 @@ export function PaymentForm({ group, members, nameOf, expenses, payments, pair, 
 }
 
 export function GroupForm({ group, currencyLocked, defaultOwnerName, save }: {
-  group?: Group; currencyLocked?: boolean; defaultOwnerName?: string; save: (group: Group, password: string, ownerName?: string) => Promise<void>;
+  group?: Group; currencyLocked?: boolean; defaultOwnerName?: string; save: (group: Group, ownerName?: string) => Promise<void>;
 }) {
   const [name, setName] = useState(group?.name ?? '')
   const [ownerName, setOwnerName] = useState(defaultOwnerName?.slice(0, 100) ?? '')
   const [description, setDescription] = useState(group?.description ?? '')
   const [currency, setCurrency] = useState(group?.currency ?? 'AUD')
-  const [rotate, setRotate] = useState(false)
-  const password = useRef<HTMLInputElement>(null)
-  const confirmPassword = useRef<HTMLInputElement>(null)
   const names = new Intl.DisplayNames('en-AU', { type: 'currency' })
   return <RecordForm submit={() => {
-    const access = password.current?.value ?? ''
-    if (access !== (confirmPassword.current?.value ?? '')) throw new Error('The passwords do not match.')
     const owner = firstName(ownerName)
     if (defaultOwnerName !== undefined && !owner) throw new Error('Enter your first name to join the group.')
-    return save({ ...group, id: group?.id ?? crypto.randomUUID(), name, description, currency, archived: group?.archived ?? false }, access, owner || undefined)
+    return save({ ...group, id: group?.id ?? crypto.randomUUID(), name, description, currency, archived: group?.archived ?? false }, owner || undefined)
   }}>
     <Field label="Group name"><input required maxLength={100} value={name} onChange={event => setName(event.target.value)} /></Field>
     {defaultOwnerName !== undefined && <Field label="Your first name"><input required autoComplete="given-name" maxLength={100}
@@ -291,13 +287,6 @@ export function GroupForm({ group, currencyLocked, defaultOwnerName, save }: {
       {currencies.map(value => <option key={value} value={value}>{value} · {names.of(value)}</option>)}
     </select></Field>
     {currencyLocked && <p className="muted">This group’s records use {currency}.</p>}
-    {group && <label className="check-line"><input type="checkbox" checked={rotate} onChange={event => setRotate(event.target.checked)} />Change group password</label>}
-    {(!group || rotate) && <>
-      <Field label="Group password"><input ref={password} type="password" autoComplete="new-password" minLength={minPasswordLength} maxLength={maxPasswordLength} required /></Field>
-      <Field label="Confirm group password"><input ref={confirmPassword} type="password" autoComplete="new-password" maxLength={maxPasswordLength} required /></Field>
-      <p className="muted">Use a unique password of at least {minPasswordLength} characters. Save it somewhere safe and share it with your group. Tally cannot recover it.</p>
-      {rotate && <p className="muted">Previous snapshots can still be opened with their original password.</p>}
-    </>}
   </RecordForm>
 }
 

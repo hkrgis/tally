@@ -27,7 +27,7 @@ function DirectoryStatus({ error, retry }: { error: string; retry: () => void })
 
 const groupSections = [
   { role: 'owned', label: 'Owned by Me', empty: 'No groups owned yet', hint: 'Create a group to start sharing expenses.' },
-  { role: 'joined', label: 'Groups I?ve Joined', empty: 'No joined groups yet', hint: 'Join using a link from a group organiser.' },
+  { role: 'joined', label: "Groups I've Joined", empty: 'No joined groups yet', hint: 'Join using a link from a group organiser.' },
 ] as const
 
 function GroupSection({ accountId, section, version, open }: {
@@ -51,7 +51,7 @@ function GroupSection({ accountId, section, version, open }: {
             <span className="tile tone-neutral" aria-hidden="true"><UsersRound size={19} /></span>
             <span className="group-list-text"><strong>{group.name}</strong>
               <small>{summary ? `${summary.memberCount} ${summary.memberCount === 1 ? 'member' : 'members'}` : 'Member count available after opening'}
-                {activity && <> ? Last activity {formatEventTime(activity)}</>}</small>
+                {activity && <> &middot; Last activity {formatEventTime(activity)}</>}</small>
             </span>
             <span className={net ? net < 0 ? 'negative' : 'positive' : 'muted'}>
               {summary && typeof net === 'number' ? balanceLabel(net, summary.currency) : 'Balance unavailable'}

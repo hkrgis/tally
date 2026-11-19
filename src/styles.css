@@ -98,14 +98,13 @@ details[open] > summary .chevron { transform: rotate(180deg); }
   background: var(--surface); border-top: 1px solid var(--line); padding: 4px 5px calc(4px + env(safe-area-inset-bottom));
 }
 .primary-nav.admin-nav { grid-template-columns: repeat(5, minmax(0, 1fr)); }
-.primary-nav a {
+.primary-nav :is(a, button) {
   display: flex; min-height: 51px; align-items: center; justify-content: center; flex-direction: column;
   gap: 3px; border-radius: 7px; color: var(--muted); font-weight: 640; font-size: .71rem;
 }
-.primary-nav a[aria-current="page"] { color: var(--accent); background: var(--violet); }
-.primary-nav a:hover, .icon-button:hover, .button:not(.primary, .danger-button):hover { background: var(--neutral-bg); }
+.primary-nav :is(a, button)[aria-current="page"] { color: var(--accent); background: var(--violet); }
+.primary-nav :is(a, button):hover, .icon-button:hover, .button:not(.primary, .danger-button):hover { background: var(--neutral-bg); }
 .icon-button { display: inline-grid; place-items: center; flex: none; min-width: 44px; min-height: 44px; border-radius: 8px; color: var(--muted); }
-.settings-button { border: 1px solid var(--line); }
 .header-actions { display: flex; justify-self: end; gap: 6px; align-items: center; }
 .header-inner.without-group { display: flex; }
 .header-admin { white-space: nowrap; padding-inline: 3px; }
@@ -379,8 +378,8 @@ input[type="checkbox"] { accent-color: var(--primary); width: 17px; height: 17px
   .brand { justify-self: start; }
   .settings-button { justify-self: end; }
   .primary-nav { position: static; display: flex; gap: 5px; border: 0; padding: 0; }
-  .primary-nav a { flex-direction: row; min-height: 46px; gap: 6px; padding-inline: 12px; font-size: .86rem; }
-  .primary-nav a svg { width: 16px; height: 16px; }
+  .primary-nav :is(a, button) { flex-direction: row; min-height: 46px; gap: 6px; padding-inline: 12px; font-size: .86rem; }
+  .primary-nav :is(a, button) svg { width: 16px; height: 16px; }
   .calendar-surface { padding: 12px; }
   .calendar-grid { gap: 4px; }
   .calendar-day { min-height: 62px; }
@@ -397,8 +396,8 @@ input[type="checkbox"] { accent-color: var(--primary); width: 17px; height: 17px
 
 @media (min-width: 700px) and (max-width: 899px) {
   .primary-nav { gap: 3px; }
-  .primary-nav a { padding-inline: 8px; }
-  .primary-nav a svg { display: none; }
+  .primary-nav :is(a, button) { padding-inline: 8px; }
+  .primary-nav :is(a, button) svg { display: none; }
 }
 
 .auth-layout { display: grid; justify-items: center; gap: 14px; padding-top: clamp(18px, 6vw, 54px); }
@@ -435,13 +434,6 @@ input[type="checkbox"] { accent-color: var(--primary); width: 17px; height: 17px
 .admin-record dl { display: flex; flex-wrap: wrap; gap: 3px 12px; margin-top: 3px; font-size: .77rem; }
 .admin-record dl div { min-width: 0; overflow-wrap: anywhere; }
 .admin-record dt { color: var(--muted); }
-.group-menu { position: relative; }
-.group-menu-actions {
-  position: absolute; z-index: 3; inset-block-start: 100%; inset-inline-start: 0; display: grid;
-  width: max-content; min-width: 140px; padding: 2px 9px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
-  box-shadow: 0 4px 14px rgb(0 0 0 / .1);
-}
-.group-menu-actions > button + button { border-top: 1px solid var(--line); }
 .member-balances { width: 100%; border-collapse: collapse; text-align: left; font-size: .85rem; }
 .member-balances th, .member-balances td { padding: 5px 10px; overflow-wrap: anywhere; }
 .member-balances th { font-weight: 700; }
@@ -471,4 +463,37 @@ input[type="checkbox"] { accent-color: var(--primary); width: 17px; height: 17px
   .group-list-row { grid-template-columns: auto minmax(0, 1fr) auto; gap: 3px 7px; }
   .group-list-row > :nth-child(3) { grid-row: 2; grid-column: 2; max-width: 100%; text-align: left; }
   .group-list-row > :last-child { grid-row: 1 / span 2; grid-column: 3; }
+}
+
+.auth-divider { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: .78rem; }
+.auth-divider::before, .auth-divider::after { content: ''; flex: 1; border-top: 1px solid var(--line); }
+.auth-card .guest-auth { justify-self: stretch; }
+.guest-exit { justify-self: end; }
+.read-only { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }
+.member-preview { display: inline-flex; align-items: center; }
+.member-count { color: var(--muted); }
+.avatar-add { position: relative; display: grid; min-height: 44px; min-width: 36px; place-items: center; }
+.avatar-add .add-person { width: 25px; height: 25px; border: 1px solid var(--line); background: var(--surface); }
+.avatar-add:hover .add-person, .avatar-add:focus-visible .add-person { background: var(--violet); }
+.header-actions .inbox-button { position: relative; }
+.inbox-button > span { position: absolute; top: 10px; right: 11px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+.account-tools { margin-top: 6px; border-top: 1px solid var(--line); }
+.discovery-list li + li, .invitation-record + .invitation-record { border-top: 1px solid var(--line); }
+.discovery-list button { display: flex; align-items: center; gap: 8px; min-height: 44px; width: 100%; padding: 6px 9px; text-align: left; }
+.discovery-list button:hover { background: var(--violet); }
+.discovery-list small { display: block; overflow-wrap: anywhere; color: var(--muted); }
+.invitation-record { padding: 6px 0; overflow-wrap: anywhere; }
+.invite-status { text-transform: capitalize; font-size: .8rem; }
+.recent-activity { border-top: 1px solid var(--line); }
+.recent-activity > summary { justify-content: flex-start; min-height: 44px; gap: 8px; margin-bottom: 0; cursor: pointer; }
+.recent-activity > summary .chevron { margin-inline-start: auto; }
+.recent-activity > summary:hover { color: var(--accent); }
+.recent-activity::details-content { block-size: 0; overflow: hidden; }
+.recent-activity[open]::details-content { block-size: auto; }
+@media (prefers-reduced-motion: no-preference) {
+  .recent-activity { interpolate-size: allow-keywords; }
+  .recent-activity::details-content { transition: block-size 180ms ease, content-visibility 180ms allow-discrete; }
+}
+@media (max-width: 375px) {
+  .header-actions .icon-button { min-width: 40px; }
 }
