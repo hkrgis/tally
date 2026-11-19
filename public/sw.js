@@ -1,7 +1,6 @@
 const scope = self.registration.scope
 const prefix = `tally:${scope}:`
-const cacheName = `${prefix}v3`
-const ledgerUrl = new URL('app.json', scope).href
+const cacheName = `${prefix}v4`
 const indexUrl = new URL('index.html', scope)
 const entryPaths = [new URL(scope).pathname, indexUrl.pathname]
 
@@ -13,7 +12,7 @@ self.addEventListener('install', event => {
     const html = await response.clone().text()
     const assets = [...html.matchAll(/(?:src|href)="(\.\/[^"]+)"/g)]
       .map(([, src]) => new URL(src, scope).href)
-    await cache.addAll([...new Set([...assets, ledgerUrl, new URL('icon-512.png', scope).href])])
+    await cache.addAll([...new Set([...assets, new URL('icon-512.png', scope).href])])
     await cache.put(scope, response)
     await self.skipWaiting()
   })())
@@ -30,8 +29,7 @@ self.addEventListener('activate', event => {
 async function serve(request) {
   const cache = await caches.open(cacheName)
   const navigation = request.mode === 'navigate'
-  const ledger = new URL(request.url).pathname === new URL(ledgerUrl).pathname
-  const key = navigation ? scope : ledger ? ledgerUrl : request.url
+  const key = navigation ? scope : request.url
   const hashedAsset = request.url.startsWith(new URL('assets/', scope).href)
   if (hashedAsset) {
     const cached = await cache.match(key)
@@ -46,17 +44,16 @@ async function serve(request) {
   }
   const cached = await cache.match(key)
   if (!cached) return new Response('Offline', { status: 503 })
-  if (!ledger) return cached
-  const headers = new Headers(cached.headers)
-  headers.set('X-Tally-Offline', '1')
-  return new Response(cached.body, { headers })
+  return cached
 }
 
 self.addEventListener('fetch', event => {
   const { request } = event
   const appEntry = entryPaths.includes(new URL(request.url).pathname)
-  if (request.method === 'GET' && request.url.startsWith(scope) && !request.headers.has('Authorization') &&
-      (request.mode !== 'navigate' || appEntry)) {
+  const asset = request.url.startsWith(new URL('assets/', scope).href) ||
+    ['manifest.webmanifest', 'icon-192.png', 'icon-512.png'].some(file => request.url === new URL(file, scope).href)
+  if (request.method === 'GET' && !request.headers.has('Authorization') &&
+      (request.mode === 'navigate' ? request.url.startsWith(scope) && appEntry : asset)) {
     event.respondWith(serve(request))
   }
 })

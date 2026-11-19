@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import published from '../public/app.json'
 import { groupPaymentMethods, isProfileEmoji, parseData, registerPaymentMethod, type AppData } from './model'
-import { parseDirectory } from './vault'
 
 const sample: AppData = {
   version: 1,
@@ -29,10 +27,7 @@ const sample: AppData = {
   activity: [],
 }
 
-describe('published ledger validation', () => {
-  it('checks the configured published ledger before deployment', () => {
-    expect(() => parseDirectory(published)).not.toThrow()
-  })
+describe('ledger validation', () => {
   it('rejects malformed dates, payments across groups, and mismatched payout totals', () => {
     const badDate = structuredClone(sample)
     badDate.expenses[0].date = '2026-11-31'

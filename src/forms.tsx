@@ -22,12 +22,14 @@ function RecordForm({ children, submit, submitLabel = 'Apply changes', remove, b
   const [error, setError] = useState('')
   const [confirm, setConfirm] = useState(false)
   const [busy, setBusy] = useState(false)
+  const running = useRef(false)
   async function run(action: EditAction) {
-    if (busy) return
+    if (running.current) return
+    running.current = true
     setBusy(true)
     setError('')
     try { await action() } catch (issue) { setError(errorText(issue)) }
-    finally { setBusy(false) }
+    finally { running.current = false; setBusy(false) }
   }
   function onSubmit(event: FormEvent) {
     event.preventDefault()
@@ -37,7 +39,7 @@ function RecordForm({ children, submit, submitLabel = 'Apply changes', remove, b
     <fieldset className="form-stack" disabled={busy}>{children}</fieldset>
     {error && <p className="notice danger" role="alert">{error}</p>}
     {confirm && <div className="notice danger">
-      <p>Remove this record from the draft and add a correction to Activity?</p>
+      <p>Remove this record and add a correction to Activity?</p>
       <div className="inline-actions">
         <button type="button" className="button danger-button" disabled={busy} onClick={() => remove && void run(remove)}>Remove record</button>
         <button type="button" className="button" disabled={busy} onClick={() => setConfirm(false)}>Keep record</button>
@@ -224,6 +226,7 @@ export function PaymentForm({ group, members, nameOf, expenses, payments, pair, 
   expenses: Expense[]; payments: Payment[]; pair?: PairBalance; payment?: Payment;
   save: (payment: Payment) => void | Promise<void>; remove?: EditAction;
 }) {
+  const [paymentId] = useState(() => payment?.id ?? crypto.randomUUID())
   const [from, setFrom] = useState(payment?.from ?? pair?.from ?? '')
   const [to, setTo] = useState(payment?.to ?? pair?.to ?? '')
   const [date, setDate] = useState(payment?.date ?? today())
@@ -237,18 +240,21 @@ export function PaymentForm({ group, members, nameOf, expenses, payments, pair, 
     const total = parseUnits(amount, minorDigits(group.currency))
     if (!from || !to || from === to) throw new Error('Select different members for the payer and recipient.')
     if (!total || total > ceiling) throw new Error(`Enter a payment greater than zero and up to ${money(ceiling, group.currency)}.`)
-    return save({ id: payment?.id ?? crypto.randomUUID(), groupId: group.id, from, to, amount: total, date, notes,
+    return save({ id: paymentId, groupId: group.id, from, to, amount: total, date, notes,
       paymentMethod: paymentMethod.trim() || undefined })
   }
-  return <RecordForm submit={submit} remove={remove}>
-    <div className="form-grid">
+  return <RecordForm submit={submit} submitLabel={payment ? 'Save changes' : 'Confirm payment'} remove={remove}>
+    {pair ? <dl className="form-grid settlement-parties">
+      <div><dt>Paid by</dt><dd>{nameOf(from)}</dd></div>
+      <div><dt>Paid to</dt><dd>{nameOf(to)}</dd></div>
+    </dl> : <div className="form-grid">
       <Field label="Paid by"><select required value={from} onChange={event => setFrom(event.target.value)}>
         <option value="">Select a member</option>{members.map(member => <option key={member.id} value={member.id}>{nameOf(member.id)}</option>)}
       </select></Field>
       <Field label="Paid to"><select required value={to} onChange={event => setTo(event.target.value)}>
         <option value="">Select a member</option>{members.filter(member => member.id !== from || member.id === to).map(member => <option key={member.id} value={member.id}>{nameOf(member.id)}</option>)}
       </select></Field>
-    </div>
+    </div>}
     {from && to && from !== to && <p className="notice">{money(outstanding, group.currency)} outstanding before this payment.</p>}
     <div className="form-grid">
       <Field label={`Amount (${group.currency})`}><input required value={amount} inputMode="decimal" onChange={event => setAmount(event.target.value)} /></Field>
@@ -266,7 +272,6 @@ export function GroupForm({ group, currencyLocked, defaultOwnerName, save }: {
   const [ownerName, setOwnerName] = useState(defaultOwnerName?.slice(0, 100) ?? '')
   const [description, setDescription] = useState(group?.description ?? '')
   const [currency, setCurrency] = useState(group?.currency ?? 'AUD')
-  const [archived, setArchived] = useState(group?.archived ?? false)
   const [rotate, setRotate] = useState(false)
   const password = useRef<HTMLInputElement>(null)
   const confirmPassword = useRef<HTMLInputElement>(null)
@@ -276,7 +281,7 @@ export function GroupForm({ group, currencyLocked, defaultOwnerName, save }: {
     if (access !== (confirmPassword.current?.value ?? '')) throw new Error('The passwords do not match.')
     const owner = firstName(ownerName)
     if (defaultOwnerName !== undefined && !owner) throw new Error('Enter your first name to join the group.')
-    return save({ ...group, id: group?.id ?? crypto.randomUUID(), name, description, currency, archived }, access, owner || undefined)
+    return save({ ...group, id: group?.id ?? crypto.randomUUID(), name, description, currency, archived: group?.archived ?? false }, access, owner || undefined)
   }}>
     <Field label="Group name"><input required maxLength={100} value={name} onChange={event => setName(event.target.value)} /></Field>
     {defaultOwnerName !== undefined && <Field label="Your first name"><input required autoComplete="given-name" maxLength={100}
@@ -286,7 +291,6 @@ export function GroupForm({ group, currencyLocked, defaultOwnerName, save }: {
       {currencies.map(value => <option key={value} value={value}>{value} · {names.of(value)}</option>)}
     </select></Field>
     {currencyLocked && <p className="muted">This group’s records use {currency}.</p>}
-    {group && <label className="check-line"><input type="checkbox" checked={archived} onChange={event => setArchived(event.target.checked)} />Archive group</label>}
     {group && <label className="check-line"><input type="checkbox" checked={rotate} onChange={event => setRotate(event.target.checked)} />Change group password</label>}
     {(!group || rotate) && <>
       <Field label="Group password"><input ref={password} type="password" autoComplete="new-password" minLength={minPasswordLength} maxLength={maxPasswordLength} required /></Field>

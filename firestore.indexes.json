@@ -1,6 +1,7 @@
 {
   "indexes": [],
   "fieldOverrides": [
-    { "collectionGroup": "parts", "fieldPath": "payload", "indexes": [] }
+    { "collectionGroup": "parts", "fieldPath": "payload", "indexes": [] },
+    { "collectionGroup": "stats", "fieldPath": "balances", "indexes": [] }
   ]
 }

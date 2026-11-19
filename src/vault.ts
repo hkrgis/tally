@@ -107,9 +107,7 @@ export async function sealGroup(data: AppData, { key, salt }: GroupKey): Promise
   return { ...entry, iv: toBase64(iv), ciphertext: toBase64(new Uint8Array(encrypted)) }
 }
 
-export async function openGroup(entry: GroupEntry, password: string) {
-  if (!password || password.length > maxPasswordLength) throw new Error('Enter the group password.')
-  const key = await deriveKey(password, entry.salt)
+export async function decryptGroup(entry: GroupEntry, key: CryptoKey) {
   let bytes: ArrayBuffer
   try {
     bytes = await webCrypto().subtle.decrypt({ name: 'AES-GCM', iv: fromBase64(entry.iv), additionalData: additionalData(entry) },
@@ -119,7 +117,13 @@ export async function openGroup(entry: GroupEntry, password: string) {
   }
   const data = parseData(JSON.parse(decoder.decode(bytes)))
   checkGroup(data, entry)
-  return { data, key, salt: entry.salt, entry }
+  return data
+}
+
+export async function openGroup(entry: GroupEntry, password: string) {
+  if (!password || password.length > maxPasswordLength) throw new Error('Enter the group password.')
+  const key = await deriveKey(password, entry.salt)
+  return { data: await decryptGroup(entry, key), key, salt: entry.salt, entry }
 }
 
 export function sameEntry(left: GroupEntry | undefined, right: GroupEntry) {

@@ -1,61 +1,49 @@
 # Tally
 
-Tally is a mobile-first expense-sharing app built with React, TypeScript, Vite, Tailwind CSS and Lucide. GitHub Pages serves the app and its encrypted group snapshots in [public/app.json](public/app.json).
+Tally is a mobile-first expense-sharing app built with React, TypeScript, Vite, Tailwind CSS and Lucide. GitHub Pages serves the frontend. Firebase Authentication manages accounts, and Firestore stores protected group metadata and encrypted ledgers.
 
-## Run locally
+## Run and test locally
 
-Use Node.js 22.12 or newer.
+Use Node.js 22.12 or newer. The Firebase CLI also needs a supported Java runtime for the Firestore emulator.
 
 ```sh
 npm ci
 npm run dev
 npm test
 npm run build
-npm run preview
 ```
 
-## Publish on GitHub Pages
+To test with local Firebase, set `VITE_FIREBASE_EMULATORS=true` in `.env.local` and start the emulators before opening the dev server. Run the Firestore rule tests against the demo project.
 
-1. Push this project to the default branch of a public GitHub repository.
-2. In **Settings → Pages → Build and deployment**, set **Source** to **GitHub Actions**.
-3. Run **Check and deploy to GitHub Pages** from the **Actions** tab, or push to the default branch. The workflow supplies the repository name and branch to the build. Vite uses relative URLs so the build works on a project subpath and at the root.
-4. Open the deployment URL shown in Actions. Supporting browsers can install Tally. After an online visit, the service worker can serve the most recently cached encrypted directory offline.
+```sh
+firebase emulators:exec --project demo-tally --only auth,firestore "npm run test:firebase"
+```
 
-If the **Check GitHub Pages configuration** step returns 404, open the repository's **Settings → Pages** as a repository admin and save **GitHub Actions** as the source. Then run the workflow again from the default branch.
+If Windows sandbox permissions prevent Vite from reading its config, add `-- --configLoader runner` to the `dev`, `test`, or `build` command.
 
-[GitHub Pages workflow documentation](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)
+## Deploy to GitHub Pages
 
-## View a group
+1. In the existing Firebase project, enable **Email/Password** and **Google** authentication. Keep email enumeration protection enabled, set a minimum password length of eight characters, and add the Pages hostname to **Authorised domains**. Ensure Firestore is on the default Native-mode database.
+2. Set `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`, and `VITE_FIREBASE_APP_ID` as GitHub Actions repository variables. For development against Firebase, put the same values in `.env.local`. These are Firebase web configuration values. The frontend requires no Firebase admin credentials or GitHub token.
+3. Verify the repository owner’s GitHub identity and their verified Firebase account independently. A Firebase project administrator should create the document `platformAdmin/identity` with `firebaseUid` set to that account’s exact Firebase Authentication UID. Record the verified owner’s GitHub ID and repository in the same document as provenance. Client writes to this document are denied. The optional `accountAdmins/<uid>` recovery setting remains separate from platform administration.
+4. Complete the existing data checks below. Deploy the Firestore rules and indexes to the existing project, then deploy the frontend as part of the same rollout. Old frontend versions will lose anonymous group access as soon as the rules change.
+5. In the GitHub repository’s **Settings → Pages**, select **GitHub Actions** as the source and run **Check and deploy to GitHub Pages**. Verify login, direct group-link access, a member invitation, and archive/restore with test accounts on the deployed site.
 
-Open the invite link shared by the organiser, or select **Open an invite** and paste the link or code. Enter the group password to see expenses, reimbursements and balances. **Lock** or a reload closes the unlocked view. **Calendar** shows monthly totals and daily expenses. Open an expense to see its notes and photos.
+```sh
+firebase deploy --only firestore:rules,firestore:indexes --project <project-id>
+```
 
-## Account groups and recovery
+## Existing data and cutover
 
-With Firebase configured, select **Sign in → Sign in with Google** to create an account or sign in with Google. Tally shows your Google profile name in Account. To use an email and password, select **Create account** and verify your email. You can reopen your groups from **Account**. Group edits save to Firestore under the verified owner's account. Viewers can still open an invite and unlock the encrypted records with the shared group password.
+- Existing Firebase accounts, group IDs, ledgers and passwords are reused. Old account groups are discovered through their existing owner index. An owner’s first unlock updates the group summary to populate member count, personal balance and activity without replacing its records.
+- **Before deploying the rules**, have the Firebase project administrator identify existing cloud groups already marked archived inside their encrypted snapshot. That old flag is unavailable to Firestore rules. For each one, use a trusted Firestore write batch to set `cloudGroups/<group-id>.archivedAt` to a server timestamp and `archivedBy` to the verified platform admin’s UID, and remove the old `accounts/<owner-uid>/groups/<group-id>` index document in the same batch. When available, copy the old index name to the archived head’s `legacyName` field. Leave the head revision and all encrypted parts intact. Existing owner unlocks also recognise and archive a legacy group whose encrypted flag is still set.
+- The old public `app.json` is excluded from the Pages build. Keep a backup before rollout. In this checkout, the previous snapshot was moved byte-for-byte to the ignored `legacy/app.json` path. It can also be exported from the pre-upgrade Git revision. The intended owner can log in and use **Settings → Import a legacy group** with the file and original group password. The importer retains expenses, payments, roster records, snapshots’ archived state and activity, and maps each legacy group ID to a stable Firebase group ID. If the file contains several groups, import each with its group code. Verify imported records before relying on the new dashboard.
+- Older links contained a group ID and did not store account membership. A verified account that already owns or has joined the group can keep using the ID. Other viewers need a new member invitation. Owners should issue a new invite for each existing roster member who needs access.
+- Previously downloaded ciphertext and public Git revisions are outside Firebase’s access control. Deploying the new rules and Pages build protects the Firebase copy and removes the static feed, but cannot revoke already distributed copies.
 
-Choose **Forgot password?** to send a reset link to your account email. Firebase project admins can also send a reset from the Authentication users page. To show **Account recovery** in Tally, add the Firestore document `accountAdmins/<Firebase Auth user UID>` with `enabled` set to boolean `true` as a Firebase project admin.
+## Roles, groups and settlements
 
-For deployment, enable **Email/Password** and **Google** in Firebase Authentication, keep email enumeration protection enabled, and require at least eight characters for new passwords. Add the deployed host under **Authorised domains** and create a Firestore database in Native mode. From this checkout, run `firebase deploy --only firestore:rules,firestore:indexes --project <project-id>`. Set the four public Firebase web values from [.env.example](.env.example) as GitHub Actions repository variables and run the Pages workflow. For local development, use `.env.local` and ensure the local hostname is authorised in Firebase, or use the emulators.
-
-To test the access rules, run `firebase emulators:start --project demo-tally --only auth,firestore` and then `npm run test:firebase`. Set `VITE_FIREBASE_EMULATORS=true` for a local dev server with the emulators.
-
-## Work on and publish changes
-
-From the home screen, select **Settings → Manage GitHub groups → Open workspace** to edit groups stored in the GitHub repository. Deployments without Firebase accounts show **Workspace** in the header. A group password opens an existing group. GitHub repository permissions control who can publish. **Log out** locks the group and closes the workspace.
-
-1. Open an existing group or choose **New group** and set a unique password of at least 14 characters. Use **Share invite** to copy its link.
-2. Add members and record expenses or reimbursements. Members can use a photo, emoji, or initials. **Cash** and **PayID** are available in both transaction forms. Add a custom method from the same dropdown to reuse it for the group.
-3. Select **Save changes**. Tally checks the file SHA before preparing the update. Copy the encrypted text, open the GitHub editor, replace the contents of `public/app.json`, and review the diff before committing. For large ledgers, save the encrypted file and replace it using an authenticated Git client.
-4. Return to Tally and select **Check save**. The live app receives the update after GitHub Pages deploys the commit.
-
-If another organiser published while you were editing, load the latest version and reapply your changes. Review GitHub's diff before committing when several people edit. **Expenses** includes CSV export in the workspace. Each expense accepts up to three resized JPEG, PNG or WebP images.
-
-## Data and limitations
-
-Every group uses one currency. Monetary values are integers in that currency’s minor units. Percentages use hundredths of a percent. Dates use ISO calendar dates and activity timestamps are UTC. Tally records a named event for each in-app edit, and Git stores commit history. Direct edits through GitHub should include a matching activity event when needed.
-
-The ledger allocates fractional units by largest remainder with stable member IDs as tie-breakers. Each expense creates its own debts between members who participated or paid. Payments apply to the oldest outstanding charges for the same pair and direction. Overpayments caused by corrections remain visible as unapplied. Tally keeps separate balances for reciprocal debts.
-
-Tally uses Web Crypto with PBKDF2-SHA-256 and AES-256-GCM. New encrypted snapshots keep group names and archive status inside ciphertext. Open and save an older group in the workspace to upgrade its snapshot. Previous Git revisions retain the original metadata and can still be unlocked with the password that protected them. Tally cannot recover a lost password.
-
-Firebase handles account authentication and reset emails. A group password unlocks the group ciphertext and stays separate from account recovery. The app's member selector changes the balance perspective.
+- Verified owners create and manage active groups, issue one-time invitations for existing roster members, and record expenses and payments. Joined accounts can read their active group, including activity. A recipient accepts the invitation while signed in, then unlocks with the group password. The invitation links their Firebase UID to one roster member.
+- **Manage group → Archive group** hides the group from its owner and members. Firestore denies their direct reads of the head, encrypted parts, membership and invitations. Archived groups can be opened or restored from **Admin** by the verified account in the trusted mapping. Opening an archived ledger still requires the group password. Restore returns access to the original owner and members. The app has no group deletion operation.
+- **Group Home** shows expense contributions and allocated shares alongside the net balance after reimbursements. **Settle Up** follows an outstanding payer-to-recipient pair. Tally applies a payment to the oldest charges for that pair in the same direction, preserves all original expenses, and supports partial payments. The save checks the ledger revision so overlapping edits cannot silently overwrite one another.
+- Firestore evaluates ownership, membership and archive status independently of the UI. Group summary metadata is kept behind those rules. Ledger contents stay encrypted with Web Crypto using PBKDF2-SHA-256 and AES-256-GCM, so Firestore rules authorise snapshot writes and Tally validates the financial records before encrypting them. Account password recovery and the group password are separate.

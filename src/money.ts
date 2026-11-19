@@ -131,3 +131,34 @@ export function memberBalance(pairs: PairBalance[], memberId: string) {
   }
   return { owes, owed, net: owed - owes }
 }
+
+export function balanceLabel(net: number, currency: string) {
+  if (net === 0) return 'Settled'
+  return `${net > 0 ? 'Gets back' : 'Owes'} ${money(Math.abs(net), currency)}`
+}
+
+export function settlementPairs(pairs: PairBalance[], memberId: string) {
+  return pairs.filter(pair => pair.outstanding > 0 && (pair.from === memberId || pair.to === memberId))
+}
+
+export function assertSettlement(payment: Payment, expenses: Expense[], payments: Payment[], currency: string) {
+  const outstanding = calculateBalances(expenses, payments).find(pair => pair.from === payment.from && pair.to === payment.to)?.outstanding ?? 0
+  if (!Number.isSafeInteger(payment.amount) || payment.amount <= 0 || payment.amount > outstanding) {
+    throw new Error(outstanding ? `Enter a payment greater than zero and up to ${money(outstanding, currency)}.`
+      : 'No outstanding debt exists between these members in this direction.')
+  }
+}
+
+export function memberExpenseTotals(expenses: Expense[]) {
+  const totals = new Map<string, { paid: number; share: number }>()
+  function add(memberId: string, field: 'paid' | 'share', amount: number) {
+    const current = totals.get(memberId) ?? { paid: 0, share: 0 }
+    current[field] += amount
+    totals.set(memberId, current)
+  }
+  for (const expense of expenses) {
+    for (const payer of expense.payers) add(payer.memberId, 'paid', payer.amount)
+    for (const share of splitExpense(expense)) add(share.memberId, 'share', share.amount)
+  }
+  return totals
+}

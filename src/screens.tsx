@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowRight, ArrowUpRight, Camera, ChevronDown, ChevronRight, Download, ListFilter, Pencil, Plus, ReceiptText, Search } from 'lucide-react'
-import { categories, type Activity, type Expense, type Payment } from './model'
-import { decimal, expenseCharges, memberBalance, money, splitExpense, type PairBalance } from './money'
+import { categories, type Activity, type Expense, type Member, type Payment } from './model'
+import { balanceLabel, decimal, expenseCharges, memberBalance, memberExpenseTotals, money, settlementPairs, splitExpense, type PairBalance } from './money'
 import { download, toCsv } from './storage'
 import { firstName } from './people'
-import { CategoryIcon, Empty, Explanation, formatDay, formatEventTime, nameInitial, OwedIcon, OwesIcon, PaymentIcon } from './ui'
+import { Avatar, CategoryIcon, Empty, Explanation, formatDay, formatEventTime, nameInitial, PaymentIcon } from './ui'
 
 export const methodLabels = { equal: 'Equal', percentage: 'Percentage', exact: 'Exact amounts', weighted: 'Weighted shares' }
 type Common = { currency: string; nameOf: (id: string) => string }
@@ -119,24 +119,46 @@ export function TransactionRow({ item, currency, nameOf, canEdit, editExpense, e
   </details>
 }
 
-export function Overview({ currency, pairs, memberId, openExpenses, openTransaction, events, ...ledger }: Common & {
+export function Overview({ currency, pairs, members, settle, canEdit, openExpenses, openTransaction, events, ...ledger }: Common & {
   expenses: Expense[]; payments: Payment[]; events: Activity[];
-  pairs: PairBalance[]; memberId: string;
+  pairs: PairBalance[]; members: Member[]; canEdit: boolean; settle: (memberId: string) => void;
   openExpenses: () => void; openTransaction: (id: string) => void;
 }) {
-  const { owes, owed, net } = memberBalance(pairs, memberId)
+  const totals = memberExpenseTotals(ledger.expenses)
   const created = new Map(events.filter(event => event.action === 'created').map(event => [`${event.entity}:${event.entityId}`, event.at]))
   const recent = transactions(ledger.expenses, ledger.payments).sort((a, b) => b.data.date.localeCompare(a.data.date) ||
     (created.get(`${b.type}:${b.data.id}`) ?? '').localeCompare(created.get(`${a.type}:${a.data.id}`) ?? '')).slice(0, 5)
   return <>
-    {memberId && <section className="summary-panel" aria-labelledby="summary-title">
-      <h2 id="summary-title" className="summary-title">Your balance</h2>
-      <dl className="metrics">
-        <div><dt><OwesIcon />You owe</dt><dd>{money(owes, currency)}</dd></div>
-        <div><dt><OwedIcon />Owed to you</dt><dd>{money(owed, currency)}</dd></div>
-        <div><dt>Net balance</dt><dd className={net < 0 ? 'negative' : 'positive'}>{net > 0 ? '+' : ''}{money(net, currency)}</dd></div>
-      </dl>
-    </section>}
+    <section className="section-block" aria-labelledby="member-balances">
+      <header className="section-heading"><h2 id="member-balances">Member balances</h2></header>
+      {members.length ? <div className="list-surface balances-surface">
+        <table className="member-balances" role="table" aria-labelledby="member-balances">
+          <thead role="rowgroup"><tr role="row">
+            <th scope="col" role="columnheader">Member</th>
+            <th scope="col" role="columnheader">Paid</th>
+            <th scope="col" role="columnheader">Share</th>
+            <th scope="col" role="columnheader">Net Balance</th>
+            <th scope="col" role="columnheader">Action</th>
+          </tr></thead>
+          <tbody role="rowgroup">{members.map((member, index) => {
+            const { paid, share } = totals.get(member.id) ?? { paid: 0, share: 0 }
+            const { net } = memberBalance(pairs, member.id)
+            const outstanding = settlementPairs(pairs, member.id).length > 0
+            const name = ledger.nameOf(member.id)
+            return <tr key={member.id} role="row">
+              <th scope="row" role="rowheader"><span className="balance-member"><Avatar member={member} index={index} />{name}</span></th>
+              <td role="cell"><span className="balance-mobile-label" aria-hidden="true">Paid</span>{money(paid, currency)}</td>
+              <td role="cell"><span className="balance-mobile-label" aria-hidden="true">Share</span>{money(share, currency)}</td>
+              <td role="cell" className={net < 0 ? 'negative' : net > 0 ? 'positive' : 'muted'}>
+                <span className="balance-mobile-label" aria-hidden="true">Net Balance</span><span>{balanceLabel(net, currency)}</span>
+              </td>
+              <td role="cell">{canEdit && outstanding && <button className="text-button" aria-label={`Settle up with ${name}`}
+                onClick={() => settle(member.id)}>Settle Up</button>}</td>
+            </tr>
+          })}</tbody>
+        </table>
+      </div> : <Empty title="No members yet">Member balances will appear here.</Empty>}
+    </section>
     <section className="section-block" aria-labelledby="recent-title">
       <header className="section-heading"><h2 id="recent-title">Recent transactions</h2>
         <button className="text-button" onClick={openExpenses}>All expenses <ArrowRight size={16} /></button>
@@ -155,6 +177,7 @@ export function Overview({ currency, pairs, memberId, openExpenses, openTransact
         </button></li>
       })}</ul> : <p className="muted compact-empty">No transactions yet.</p>}
     </section>
+    <ActivityFeed events={events} limit={5} />
   </>
 }
 
@@ -269,12 +292,12 @@ export function Balances({ pairs, currency, nameOf, canEdit, settle, editPayment
   </section>
 }
 
-export function ActivityFeed({ events }: { events: Activity[] }) {
+export function ActivityFeed({ events, limit }: { events: Activity[]; limit?: number }) {
   const sorted = events.filter(event => event.entity !== 'session').reverse().sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
-  return <section aria-labelledby="activity-title">
-    <header className="section-heading page-section-heading"><h2 id="activity-title">Activity</h2></header>
+  return <section className="section-block" aria-labelledby="activity-title">
+    <header className="section-heading page-section-heading"><h2 id="activity-title">{limit ? 'Recent activity' : 'Activity'}</h2></header>
     {sorted.length === 0 ? <Empty title="No activity yet">Changes to this group will appear here.</Empty> :
-      <ol className="activity-list">{sorted.map(event => <li key={event.id}>
+      <ol className="activity-list">{sorted.slice(0, limit ?? sorted.length).map(event => <li key={event.id}>
         <div><strong>{event.entity === 'member' ? firstName(event.title) : event.title}</strong>
           <p>{event.actor === 'Group owner' ? event.actor : firstName(event.actor)} {event.action} {event.entity === 'expense' ? 'an' : 'a'} {event.entity}</p></div>
         <time dateTime={event.at}>{formatEventTime(event.at)}</time>

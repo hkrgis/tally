@@ -5,6 +5,14 @@ service cloud.firestore {
       return request.auth != null && request.auth.token.email_verified == true;
     }
 
+    function adminPath() {
+      return /databases/$(database)/documents/platformAdmin/identity;
+    }
+
+    function admin() {
+      return verified() && exists(adminPath()) && get(adminPath()).data.firebaseUid == request.auth.uid;
+    }
+
     function groupId(id) {
       return id.matches('^f-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$');
     }
@@ -13,40 +21,202 @@ service cloud.firestore {
       return /databases/$(database)/documents/cloudGroups/$(id);
     }
 
-    function validHead(data) {
-      return data.keys().hasAll(['owner', 'revision', 'partCount'])
-        && data.keys().hasOnly(['owner', 'revision', 'partCount'])
-        && data.owner == request.auth.uid
-        && data.revision is string && data.revision.size() == 36
-        && data.partCount is int && data.partCount >= 1 && data.partCount <= 12;
+    function ownedPath(uid, id) {
+      return /databases/$(database)/documents/accounts/$(uid)/groups/$(id);
+    }
+
+    function joinedPath(uid, id) {
+      return /databases/$(database)/documents/accounts/$(uid)/joined/$(id);
+    }
+
+    function memberPath(id, uid) {
+      return /databases/$(database)/documents/cloudGroups/$(id)/members/$(uid);
+    }
+
+    function invitation(id, token) {
+      return /databases/$(database)/documents/cloudGroups/$(id)/invites/$(token);
+    }
+
+    function assignedMember(id, memberId) {
+      return /databases/$(database)/documents/cloudGroups/$(id)/assignments/$(memberId);
+    }
+
+    function ownerMemberId(head) {
+      return head.get('summary', {}).get('ownerMemberId', '');
+    }
+
+    function statsPath(id) {
+      return /databases/$(database)/documents/cloudGroups/$(id)/stats/current;
+    }
+
+    function active(head) {
+      return head.get('archivedAt', null) == null;
+    }
+
+    function activeOwner(head) {
+      return verified() && active(head) && head.owner == request.auth.uid;
+    }
+
+    function participant(id, head) {
+      return verified() && active(head)
+        && (head.owner == request.auth.uid || exists(memberPath(id, request.auth.uid)));
+    }
+
+    function validSummary(data) {
+      return data is map && data.keys().hasAll(['name', 'currency', 'memberCount', 'lastActivityAt', 'ownerMemberId'])
+        && data.keys().hasOnly(['name', 'currency', 'memberCount', 'lastActivityAt', 'ownerMemberId', 'createdOn'])
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 100
+        && data.currency is string && data.currency.matches('^[A-Z]{3}$')
+        && data.memberCount is int && data.memberCount >= 0
+        && data.lastActivityAt is string && data.lastActivityAt.size() <= 30
+        && data.ownerMemberId is string && data.ownerMemberId.size() <= 80
+        && (!('createdOn' in data) || (data.createdOn is string && data.createdOn.size() <= 30));
+    }
+
+    function validContent(data) {
+      return data.keys().hasAll(['owner', 'revision', 'partCount', 'summary', 'createdAt'])
+        && data.keys().hasOnly(['owner', 'revision', 'partCount', 'summary', 'createdAt', 'archivedAt', 'archivedBy', 'restoredAt'])
+        && data.owner is string && data.revision is string && data.revision.size() == 36
+        && data.partCount is int && data.partCount >= 1 && data.partCount <= 12
+        && (data.get('createdAt', null) == null || data.createdAt is timestamp)
+        && validSummary(data.summary);
+    }
+
+    function validArchive(id, head) {
+      return head.archivedAt == request.time && head.archivedBy == request.auth.uid
+        && !existsAfter(ownedPath(head.owner, id));
+    }
+
+    function canArchive(id) {
+      let previous = resource.data;
+      let next = request.resource.data;
+      return active(previous) && (activeOwner(previous) || admin())
+        && next.diff(previous).affectedKeys().hasOnly(['archivedAt', 'archivedBy', 'summary', 'legacyName'])
+        && (next.get('summary', null) == previous.get('summary', null)
+          || (!('summary' in previous) && validSummary(next.summary)))
+        && (next.get('legacyName', null) == previous.get('legacyName', null)
+          || (!('summary' in next) && next.legacyName == get(ownedPath(previous.owner, id)).data.name))
+        && validArchive(id, next);
+    }
+
+    function canRestore(id) {
+      let previous = resource.data;
+      let next = request.resource.data;
+      return !active(previous) && admin()
+        && next.diff(previous).affectedKeys().hasOnly(['archivedAt', 'archivedBy', 'restoredAt'])
+        && !next.keys().hasAny(['archivedAt', 'archivedBy']) && next.restoredAt == request.time
+        && existsAfter(ownedPath(previous.owner, id));
+    }
+
+    function canSave(id) {
+      let previous = resource.data;
+      let next = request.resource.data;
+      return activeOwner(previous) && active(next) && validContent(next)
+        && !next.keys().hasAny(['archivedAt', 'archivedBy'])
+        && next.owner == previous.owner && next.revision != previous.revision
+        && next.get('createdAt', null) == previous.get('createdAt', null)
+        && next.get('restoredAt', null) == previous.get('restoredAt', null)
+        && (ownerMemberId(next) == '' || !exists(assignedMember(id, ownerMemberId(next))))
+        && existsAfter(ownedPath(next.owner, id))
+        && getAfter(statsPath(id)).data.revision == next.revision;
     }
 
     match /accountAdmins/{uid} {
       allow get: if verified() && request.auth.uid == uid;
     }
 
+    match /platformAdmin/identity {
+      allow get: if verified() && resource.data.firebaseUid == request.auth.uid;
+    }
+
     match /accounts/{uid}/groups/{id} {
       allow read: if verified() && request.auth.uid == uid;
-      allow create, update: if verified() && request.auth.uid == uid && groupId(id)
-        && getAfter(groupPath(id)).data.owner == uid
-        && request.resource.data.keys().hasOnly(['name'])
-        && request.resource.data.name is string
-        && request.resource.data.name.size() >= 1 && request.resource.data.name.size() <= 100;
+      allow get: if admin() && active(get(groupPath(id)).data);
+      allow create, update: if verified() && groupId(id)
+        && getAfter(groupPath(id)).data.owner == uid && active(getAfter(groupPath(id)).data)
+        && (request.auth.uid == uid || admin()) && request.resource.data.keys().size() == 0;
+      allow delete: if verified() && (request.auth.uid == uid || admin())
+        && getAfter(groupPath(id)).data.owner == uid && !active(getAfter(groupPath(id)).data);
+    }
+
+    match /accounts/{uid}/joined/{id} {
+      // This index stores opaque references only. The group head and membership are checked independently.
+      allow list: if verified() && request.auth.uid == uid;
+      allow create: if verified() && request.auth.uid == uid && active(get(groupPath(id)).data)
+        && request.resource.data.keys().size() == 0
+        && existsAfter(memberPath(id, uid));
     }
 
     match /cloudGroups/{id} {
-      // An invite can retrieve ciphertext by its random ID. Group names are in the private index.
-      allow get: if groupId(id);
-      allow create: if verified() && groupId(id) && validHead(request.resource.data);
-      allow update: if verified() && resource.data.owner == request.auth.uid
-        && validHead(request.resource.data) && request.resource.data.revision != resource.data.revision;
+      allow get: if groupId(id) && (verified() && resource == null || participant(id, resource.data) || admin());
+      allow list: if admin();
+      allow create: if verified() && groupId(id) && validContent(request.resource.data)
+        && request.resource.data.owner == request.auth.uid && request.resource.data.createdAt == request.time
+        && !('restoredAt' in request.resource.data)
+        && getAfter(statsPath(id)).data.revision == request.resource.data.revision
+        && ((active(request.resource.data) && !request.resource.data.keys().hasAny(['archivedAt', 'archivedBy'])
+            && existsAfter(ownedPath(request.auth.uid, id))) || validArchive(id, request.resource.data));
+      allow update: if groupId(id) && (canSave(id) || canArchive(id) || canRestore(id));
+
+      match /members/{uid} {
+        allow get: if participant(id, get(groupPath(id)).data) && request.auth.uid == uid;
+        allow create: if verified() && request.auth.uid == uid && active(get(groupPath(id)).data)
+          && request.resource.data.keys().hasAll(['memberId', 'token'])
+          && request.resource.data.keys().hasOnly(['memberId', 'token'])
+          && request.resource.data.token is string && request.resource.data.token.matches('^[a-f0-9]{64}$')
+          && request.resource.data.memberId is string && request.resource.data.memberId.matches('^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$')
+          && request.resource.data.memberId != ownerMemberId(get(groupPath(id)).data)
+          && getAfter(invitation(id, request.resource.data.token)).data.claimedBy == uid
+          && getAfter(invitation(id, request.resource.data.token)).data.memberId == request.resource.data.memberId
+          && getAfter(assignedMember(id, request.resource.data.memberId)).data.uid == uid
+          && existsAfter(joinedPath(uid, id));
+      }
+
+      match /assignments/{memberId} {
+        allow get: if activeOwner(get(groupPath(id)).data);
+        allow create: if verified() && active(get(groupPath(id)).data)
+          && request.resource.data.keys().hasOnly(['uid']) && request.resource.data.uid == request.auth.uid
+          && getAfter(memberPath(id, request.auth.uid)).data.memberId == memberId;
+      }
+
+      match /invites/{token} {
+        // Only a verified account holding the exact random token can redeem an unused invitation.
+        allow get: if verified() && active(get(groupPath(id)).data)
+          && (activeOwner(get(groupPath(id)).data) || resource.data.get('claimedBy', null) == null
+            || resource.data.claimedBy == request.auth.uid);
+        allow create: if activeOwner(get(groupPath(id)).data) && token.matches('^[a-f0-9]{64}$')
+          && request.resource.data.keys().hasOnly(['memberId'])
+          && request.resource.data.memberId.matches('^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$')
+          && request.resource.data.memberId != ownerMemberId(get(groupPath(id)).data)
+          && !exists(assignedMember(id, request.resource.data.memberId));
+        allow update: if verified() && active(get(groupPath(id)).data) && resource.data.get('claimedBy', null) == null
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['claimedBy'])
+          && request.resource.data.claimedBy == request.auth.uid
+          && getAfter(memberPath(id, request.auth.uid)).data.token == token;
+      }
+
+      function canWriteSnapshot() {
+        let next = getAfter(groupPath(id)).data;
+        return verified() && next.owner == request.auth.uid
+          && (!exists(groupPath(id)) || (activeOwner(get(groupPath(id)).data) && active(next)
+              && next.revision != get(groupPath(id)).data.revision));
+      }
+
+      match /stats/current {
+        allow get: if participant(id, get(groupPath(id)).data) || (!active(get(groupPath(id)).data) && admin());
+        allow create, update: if canWriteSnapshot()
+          && request.resource.data.keys().hasAll(['revision', 'balances'])
+          && request.resource.data.keys().hasOnly(['revision', 'balances'])
+          && request.resource.data.revision == getAfter(groupPath(id)).data.revision
+          && request.resource.data.balances is map;
+      }
 
       match /parts/{partId} {
         allow get: if groupId(id)
+          && (participant(id, get(groupPath(id)).data) || (!active(get(groupPath(id)).data) && admin()))
           && resource.data.revision == get(groupPath(id)).data.revision
           && resource.data.part < get(groupPath(id)).data.partCount;
-        allow create, update: if verified() && groupId(id) && partId.matches('^(0|[1-9]|1[01])$')
-          && getAfter(groupPath(id)).data.owner == request.auth.uid
+        allow create, update: if groupId(id) && partId.matches('^(0|[1-9]|1[01])$') && canWriteSnapshot()
           && request.resource.data.keys().hasAll(['part', 'revision', 'payload'])
           && request.resource.data.keys().hasOnly(['part', 'revision', 'payload'])
           && request.resource.data.revision == getAfter(groupPath(id)).data.revision
@@ -54,8 +224,9 @@ service cloud.firestore {
           && request.resource.data.part < getAfter(groupPath(id)).data.partCount
           && request.resource.data.payload is string
           && request.resource.data.payload.size() >= 1 && request.resource.data.payload.size() <= 500000;
-        allow delete: if verified() && getAfter(groupPath(id)).data.owner == request.auth.uid
-          && resource.data.part >= getAfter(groupPath(id)).data.partCount;
+        allow delete: if groupId(id) && activeOwner(get(groupPath(id)).data) && active(getAfter(groupPath(id)).data)
+          && resource.data.part >= getAfter(groupPath(id)).data.partCount
+          && getAfter(groupPath(id)).data.revision != get(groupPath(id)).data.revision;
       }
     }
   }

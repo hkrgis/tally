@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { calculateBalances, decimal, expenseCharges, memberBalance, minorDigits, money, parseUnits, splitExpense } from './money'
+import { assertSettlement, balanceLabel, calculateBalances, decimal, expenseCharges, memberBalance, memberExpenseTotals, minorDigits, money, parseUnits, settlementPairs, splitExpense } from './money'
 import type { Expense, Payment } from './model'
 
 const groupId = 'group'
@@ -84,5 +84,33 @@ describe('original debtor and creditor relationships', () => {
     const [unmatched] = calculateBalances([], [payment()])
     expect(unmatched).toMatchObject({ from: 'b', to: 'a', outstanding: 0, paid: 20, unapplied: 20 })
     expect(unmatched.payments[0]).toMatchObject({ applied: 0, unapplied: 20 })
+  })
+})
+
+
+describe('settlement from group home', () => {
+  it('keeps actual directions even when net is zero, with no inferred settlement across a chain', () => {
+    const spends = [['b', 'a'], ['c', 'b']].map(([from, to], index) =>
+      expense({ id: 'chain-' + index, payers: [entry(to, 100)], split: { method: 'equal', participants: [entry(from, 1)] } }))
+    const pairs = calculateBalances(spends, [])
+    expect(memberBalance(pairs, 'b').net).toBe(0)
+    expect(balanceLabel(0, 'AUD')).toBe('Settled')
+    expect(settlementPairs(pairs, 'b').map(pair => [pair.from, pair.to])).toEqual([['b', 'a'], ['c', 'b']])
+    expect(() => assertSettlement(payment({ from: 'c', to: 'a' }), spends, [], 'AUD')).toThrow('No outstanding debt')
+  })
+
+  it('accepts a partial payment, rejects overpayment and leaves original paid and share totals intact', () => {
+    const spends = [expense()]
+    const partial = payment({ amount: 20 })
+    expect(() => assertSettlement(partial, spends, [], 'AUD')).not.toThrow()
+    expect(() => assertSettlement(payment({ amount: 14 }), spends, [partial], 'AUD')).toThrow('$0.13')
+    expect(() => assertSettlement(payment({ amount: 0 }), spends, [], 'AUD')).toThrow()
+    expect(() => assertSettlement(payment({ amount: 13 }), spends, [partial], 'AUD')).not.toThrow()
+    const pairs = calculateBalances(spends, [partial, payment({ id: 'other-payment', amount: 13 })])
+    expect(settlementPairs(pairs, 'b')).toEqual([])
+    expect(memberExpenseTotals(spends).get('a')).toEqual({ paid: 100, share: 34 })
+    expect(memberExpenseTotals(spends).get('b')).toEqual({ paid: 0, share: 33 })
+    expect(balanceLabel(memberBalance(pairs, 'a').net, 'AUD')).toBe('Gets back $0.33')
+    expect(balanceLabel(memberBalance(pairs, 'c').net, 'AUD')).toBe('Owes $0.33')
   })
 })

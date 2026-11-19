@@ -400,3 +400,75 @@ input[type="checkbox"] { accent-color: var(--primary); width: 17px; height: 17px
   .primary-nav a { padding-inline: 8px; }
   .primary-nav a svg { display: none; }
 }
+
+.auth-layout { display: grid; justify-items: center; gap: 14px; padding-top: clamp(18px, 6vw, 54px); }
+.auth-card {
+  display: grid; gap: 12px; width: min(100%, 390px); margin: 12px auto 0;
+  padding: clamp(13px, 5vw, 24px); border: 1px solid var(--line); border-radius: 14px;
+  background: var(--surface);
+}
+.auth-card h1, .directory-heading h1 { font-size: clamp(1.4rem, 5vw, 1.9rem); font-weight: 750; letter-spacing: -.038em; line-height: 1.2; }
+.auth-card > p { color: var(--muted); font-size: .86rem; }
+.auth-card .form-stack > .button { justify-self: stretch; }
+.auth-card > .button { justify-self: start; }
+.auth-card > .text-button { justify-self: center; }
+.auth-segments {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px; padding: 3px;
+  background: var(--violet); border: 1px solid var(--line); border-radius: 9px;
+}
+.auth-segments > button { min-height: 36px; padding: 5px 8px; border-radius: 6px; color: var(--accent); font-size: .83rem; font-weight: 700; }
+.auth-segments > button[aria-pressed="true"] { color: var(--primary-text); background: var(--primary); }
+.directory-segments { min-width: min(100%, 210px); }
+.directory-heading { display: flex; flex-wrap: wrap; gap: 8px 12px; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.directory-section + .directory-section { margin-top: 13px; }
+.directory-list li + li, .admin-list li + li { border-top: 1px solid var(--line); }
+.group-list-row {
+  width: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(0, auto) auto;
+  align-items: center; gap: 9px; padding: 9px; text-align: left; border-radius: 10px; min-height: 58px;
+}
+.group-list-row:hover { background: color-mix(in srgb, var(--violet) 45%, transparent); }
+.group-list-row > :nth-child(3) { max-width: 115px; text-align: right; font-size: .82rem; font-weight: 700; overflow-wrap: anywhere; }
+.group-list-text { min-width: 0; }
+.group-list-text small { display: block; font-size: .75rem; color: var(--muted); }
+.admin-list li { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: start; gap: 3px 10px; padding: 9px 12px; }
+.admin-record { max-width: 100%; }
+.admin-record dl { display: flex; flex-wrap: wrap; gap: 3px 12px; margin-top: 3px; font-size: .77rem; }
+.admin-record dl div { min-width: 0; overflow-wrap: anywhere; }
+.admin-record dt { color: var(--muted); }
+.group-menu { position: relative; }
+.group-menu-actions {
+  position: absolute; z-index: 3; inset-block-start: 100%; inset-inline-start: 0; display: grid;
+  width: max-content; min-width: 140px; padding: 2px 9px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 4px 14px rgb(0 0 0 / .1);
+}
+.group-menu-actions > button + button { border-top: 1px solid var(--line); }
+.member-balances { width: 100%; border-collapse: collapse; text-align: left; font-size: .85rem; }
+.member-balances th, .member-balances td { padding: 5px 10px; overflow-wrap: anywhere; }
+.member-balances th { font-weight: 700; }
+.member-balances thead th { font-size: .77rem; color: var(--muted); }
+.member-balances tbody tr { border-top: 1px solid var(--line); }
+.member-balances tbody td { font-variant-numeric: tabular-nums; }
+.balance-member { display: flex; gap: 7px; align-items: center; }
+.balance-mobile-label { display: none; }
+.settlement-parties dt { font-size: .77rem; color: var(--muted); }
+.settlement-parties dd { font-weight: 670; overflow-wrap: anywhere; }
+
+@media (max-width: 540px) {
+  .member-balances, .member-balances tbody { display: block; }
+  .member-balances thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .member-balances tbody tr { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: center; padding: 6px 4px; }
+  .member-balances tbody tr:first-child { border-top: 0; }
+  .member-balances th[scope="row"] { grid-column: 1 / 3; grid-row: 1; }
+  .member-balances td:last-child { grid-column: 3; grid-row: 1; padding-block: 0; justify-self: end; }
+  .member-balances td:last-child button { white-space: nowrap; }
+  .member-balances th, .member-balances td { padding-inline: 6px; }
+  .balance-mobile-label { display: block; font-size: .69rem; color: var(--muted); }
+}
+
+@media (max-width: 375px) {
+  .header-inner { padding-inline: 10px; }
+  .header-actions { gap: 3px; }
+  .group-list-row { grid-template-columns: auto minmax(0, 1fr) auto; gap: 3px 7px; }
+  .group-list-row > :nth-child(3) { grid-row: 2; grid-column: 2; max-width: 100%; text-align: left; }
+  .group-list-row > :last-child { grid-row: 1 / span 2; grid-column: 3; }
+}
