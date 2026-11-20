@@ -158,7 +158,7 @@ export function GuestView({ token, close, retry }: { token: string; close: () =>
   const rows = group && data ? { currency: group.currency, expenses: data.expenses, payments: data.payments,
     nameOf, canEdit: false, editExpense: noEdit, editPayment: noEdit } : undefined
   const pairs = data ? calculateBalances(data.expenses, data.payments) : []
-  return <div className={group ? "workspace" : undefined}>
+  return <div className={group ? view === "overview" ? "workspace overview-workspace" : "workspace" : undefined}>
     <header className="site-header"><div className="header-inner without-group">
       <span className="brand"><span className="brand-mark" aria-hidden="true"><i /><i /><i /><i /></span>Tally</span>
       {group && <div className="workspace-crumb"><span>Guest view</span><span aria-hidden="true">/</span><strong>{group.name}</strong></div>}

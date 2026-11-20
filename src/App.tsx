@@ -594,7 +594,7 @@ function SignedInApp({ account, theme, changeTheme, viewGuest }: {
   const focus = route.page === 'group' ? route.focus : undefined
   const groupHref = (view: GroupView) => route.page === 'group' ? urlFor({ ...route, token: '', view, focus: undefined }, new URL(location.href)).href : home.href
   const settle = (pair: PairBalance) => open({ kind: 'payment', pair })
-  return <div className={group ? "workspace" : undefined}>
+  return <div className={group ? activeView === "overview" ? "workspace overview-workspace" : "workspace" : undefined}>
     <a className="skip-link" href="#page-content" onClick={event => { event.preventDefault(); document.getElementById('page-content')?.focus() }}>Skip to content</a>
     <header className="site-header">
       <div className={`header-inner${group ? '' : ' without-group'}`}>
@@ -675,7 +675,7 @@ function SignedInApp({ account, theme, changeTheme, viewGuest }: {
           </div>
           {canStartEdit && <div className="workspace-group-actions">
             <button className="button share-action" aria-label="Share" title="Share" onClick={() => open({ kind: "invite-members" })}><Link2 size={17} /><span>Share</span></button>
-            <button className="icon-button" aria-label="Manage group" title="Manage group" onClick={() => open({ kind: "manage" })}><Ellipsis size={20} /></button>
+            <button className="icon-button" aria-label="Manage group" title="More options" onClick={() => open({ kind: "manage" })}><Ellipsis size={20} /></button>
             <div className="add-expense-dock"><button className="button primary add-expense" onClick={() => startExpense()}><Plus size={20} />Add expense</button></div>
           </div>}
         </section>

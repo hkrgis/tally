@@ -317,15 +317,15 @@ export function Balances({ pairs, currency, nameOf, canEdit, settle, editPayment
   </section>
 }
 
-export function ActivityFeed({ events, limit }: { events: Activity[]; limit?: number }) {
+export function ActivityFeed({ events, collapsible = false }: { events: Activity[]; collapsible?: boolean }) {
   const sorted = events.filter(event => event.entity !== 'session').reverse().sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
   const content = sorted.length === 0 ? <Empty title="No activity yet">Changes to this group will appear here.</Empty> :
-      <ol className="activity-list">{sorted.slice(0, limit ?? sorted.length).map(event => <li key={event.id}>
+      <ol className="activity-list">{sorted.map(event => <li key={event.id}>
         <div><strong>{event.entity === 'member' ? firstName(event.title) : event.title}</strong>
           <p>{event.actor === 'Group owner' ? event.actor : firstName(event.actor)} {event.action} {event.entity === 'expense' ? 'an' : 'a'} {event.entity}</p></div>
         <time dateTime={event.at}>{formatEventTime(event.at)}</time>
       </li>)}</ol>
-  if (limit !== undefined) return <details className="section-block recent-activity">
+  if (collapsible) return <details className="section-block recent-activity">
     <summary className="section-heading"><h2>Recent activity</h2><span className="muted">{sorted.length}<span className="sr-only"> events</span></span>
       <ChevronDown className="chevron" size={17} aria-hidden="true" /></summary>
     <div className="recent-activity-body">{content}</div>
