@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { type AppData } from './model'
-import { createGroupKey, inviteCode, openGroup, parseDirectory, sameDirectory, sealGroup } from './vault'
+import { accountGroupKey, createAccountGroupKey, createGroupKey, decryptGroup, inviteCode, openGroup, parseDirectory, sameDirectory, sealGroup } from './vault'
 
 const password = 'sample test phrase only'
 const group = { id: 'book-club', name: 'Book Club', description: 'Private group description', currency: 'AUD', archived: false }
@@ -74,6 +74,22 @@ describe('encrypted group records', () => {
     const entry = await sealGroup(ledger, await createGroupKey(password))
     expect(JSON.stringify(entry)).not.toContain(receipt.name)
     expect((await openGroup(entry, password)).data).toEqual(ledger)
+  })
+
+  it('reseals a legacy ledger for account access without sharing its password-derived key', async () => {
+    const old = await createGroupKey(password)
+    const legacy = await sealGroup(data, old)
+    const opened = await openGroup(legacy, password)
+    const { protection, encoded } = await createAccountGroupKey()
+    const encrypted = await sealGroup(opened.data, protection)
+    const fetched = await accountGroupKey(encrypted.salt, encoded)
+    expect(fetched.key.extractable).toBe(false)
+    expect(encrypted.salt).not.toBe(legacy.salt)
+    expect(JSON.stringify(encrypted)).not.toContain(encoded)
+    expect(await decryptGroup(encrypted, fetched.key)).toEqual(data)
+    await expect(decryptGroup(encrypted, old.key)).rejects.toThrow()
+    await expect(decryptGroup(legacy, fetched.key)).rejects.toThrow()
+    await expect(accountGroupKey(encrypted.salt, 'invalid')).rejects.toThrow('Group access')
   })
 
   it('protects the new version with a new password after rotation', async () => {

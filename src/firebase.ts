@@ -4,7 +4,7 @@ import { parseData, type AppData } from './model'
 import { emailKey, guestParts, maxParts, newToken, snapshotParts } from './guestData'
 import { writeGuestShare, type GuestShare } from './guestStore'
 import { StaleDataError } from './storage'
-import { parseDirectory, type GroupEntry } from './vault'
+import { accountGroupKey, decryptGroup, parseDirectory, type GroupEntry, type GroupKey } from './vault'
 
 const emulator = import.meta.env.DEV && import.meta.env.VITE_FIREBASE_EMULATORS === 'true' ||
   import.meta.env.MODE === 'emulator' && import.meta.env.VITE_FIREBASE_EMULATORS === 'true'
@@ -24,10 +24,10 @@ export type GroupSummary = {
   ownerMemberId: string; createdOn?: string; description?: string;
 }
 export type GroupHead = {
-  id: string; owner: string; revision: string; partCount: number; summary?: GroupSummary; storage?: 'account'; receiptVersion?: 1;
+  id: string; owner: string; revision: string; partCount: number; summary?: GroupSummary; storage?: 'account' | 'key'; receiptVersion?: 1;
   createdAt?: string; archivedAt?: string; archivedBy?: string; restoredAt?: string; legacyName?: string;
 }
-export type AccountLedger = GroupHead & { data: AppData; memberId: string }
+export type AccountLedger = GroupHead & { data: AppData; memberId: string; protection?: GroupKey }
 export type CloudGroup = AccountLedger | (GroupHead & { entry: GroupEntry; memberId: string })
 export type GroupRole = 'owned' | 'joined'
 export type AccountGroup = GroupHead & { name: string; balance?: number }
@@ -191,7 +191,7 @@ function consistentHead(id: string, value: Record<string, unknown>): GroupHead {
     return field && typeof field === 'object' && 'toDate' in field && typeof field.toDate === 'function'
       ? (field.toDate() as Date).toISOString() : undefined
   }
-  return { id, owner, revision, partCount, summary: readSummary(summary), storage: storage === 'account' ? storage : undefined,
+  return { id, owner, revision, partCount, summary: readSummary(summary), storage: storage === 'account' || storage === 'key' ? storage : undefined,
     ...(receiptVersion === 1 ? { receiptVersion } : {}),
     createdAt: date(createdAt), archivedAt: date(archivedAt), restoredAt: date(restoredAt), archivedBy: typeof archivedBy === 'string' ? archivedBy : undefined, legacyName: typeof legacyName === 'string' ? legacyName : undefined }
 }
@@ -290,6 +290,15 @@ export async function readCloudGroup(id: string): Promise<CloudGroup> {
     }
     const entry = parseDirectory({ version: 2, groups: [payload] }).groups[0]
     if (entry.id !== id) throw new Error('The stored ledger did not match this group.')
+    if (head.storage === 'key') {
+      const access = await store.getDocFromServer(store.doc(group, 'access', 'account'))
+      const encoded = access.data()?.key
+      if (typeof encoded !== 'string') throw new Error('Group access has not been set up correctly.')
+      const protection = await accountGroupKey(entry.salt, encoded)
+      const data = await decryptGroup(entry, protection.key)
+      data.groups[0].archived = Boolean(head.archivedAt)
+      return { ...head, data, memberId, protection }
+    }
     return { ...head, entry, memberId }
   }
   throw new Error('The group changed while loading. Try again.')
@@ -304,17 +313,17 @@ export async function watchGroupHead(id: string, change: (head: GroupHead) => vo
   }, lost)
 }
 
-export async function saveCloudGroup(account: Account, data: AppData, expectedRevision?: string, removedMemberId?: string, encrypted?: GroupEntry, invite?: InviteDraft): Promise<AccountLedger> {
+export async function saveCloudGroup(account: Account, data: AppData, expectedRevision?: string, removedMemberId?: string, encrypted?: GroupEntry, invite?: InviteDraft, newAccountKey?: string): Promise<AccountLedger> {
   if (!account.verified) throw new Error('Verify your email before saving groups.')
   const { id, archived } = data.groups[0]
   if (!isCloudGroup(id)) throw new Error('Only account groups can be saved to Firebase.')
   const parts = snapshotParts(encrypted ?? data)
-  const storage = encrypted ? undefined : 'account' as const
+  if (newAccountKey && (!encrypted || archived)) throw new Error('Only active encrypted groups can enable account access.')
   const { auth, db, store } = await firebase()
   if (auth.currentUser?.uid !== account.id) throw new Error('Sign in again to save this group.')
   const group = store.doc(db, 'cloudGroups', id)
   const revision = crypto.randomUUID()
-  const summary = summariseGroup(data, storage === "account")
+  const summary = summariseGroup(data, !encrypted)
   const pairs = calculateBalances(data.expenses, data.payments)
   const balances = Object.fromEntries(data.members.map(member => [member.id, memberBalance(pairs, member.id).net]))
   let savedHead: GroupHead | undefined
@@ -328,6 +337,9 @@ export async function saveCloudGroup(account: Account, data: AppData, expectedRe
     }
     if (head?.revision !== expectedRevision) throw new StaleDataError('Another edit was saved first. Reopen the group and try again.')
 
+    if (newAccountKey && head?.storage) throw new Error('This group is already using account access.')
+    if (head?.storage === 'key' && !encrypted) throw new Error('Reopen the group and try again.')
+    const storage = newAccountKey || head?.storage === 'key' ? 'key' : encrypted ? undefined : 'account'
     const owner = head?.owner ?? account.id
     const index = store.doc(db, 'accounts', owner, 'groups', id)
     const assignment = removedMemberId ? store.doc(group, 'assignments', removedMemberId) : undefined
@@ -348,6 +360,7 @@ export async function saveCloudGroup(account: Account, data: AppData, expectedRe
       ...(original?.restoredAt ? { restoredAt: original.restoredAt } : {}),
       createdAt: original ? original.createdAt ?? null : store.serverTimestamp(),
     })
+    if (newAccountKey) transaction.set(store.doc(group, 'access', 'account'), { key: newAccountKey })
     if (!archived) transaction.set(index, {})
     transaction.set(store.doc(group, 'stats', 'current'), { revision, balances })
     parts.forEach((payload, part) => transaction.set(store.doc(group, 'parts', String(part)), { part, revision, payload }))

@@ -27,7 +27,7 @@ const directorySchema = z.strictObject({
 
 export type GroupEntry = z.infer<typeof groupEntry>
 export type Directory = z.infer<typeof directorySchema>
-type GroupKey = { key: CryptoKey; salt: string }
+export type GroupKey = { key: CryptoKey; salt: string }
 
 export function parseDirectory(input: unknown): Directory {
   const result = directorySchema.safeParse(input)
@@ -69,6 +69,18 @@ export async function createGroupKey(password: string): Promise<GroupKey> {
   }
   const salt = toBase64(webCrypto().getRandomValues(new Uint8Array(16)))
   return { salt, key: await deriveKey(password, salt) }
+}
+
+export async function accountGroupKey(salt: string, encoded: string): Promise<GroupKey> {
+  if (!/^[A-Za-z0-9+/]{43}=$/.test(encoded)) throw new Error('Group access has not been set up correctly.')
+  const key = await webCrypto().subtle.importKey('raw', fromBase64(encoded), 'AES-GCM', false, ['encrypt', 'decrypt'])
+  return { key, salt }
+}
+
+export async function createAccountGroupKey() {
+  const encoded = toBase64(webCrypto().getRandomValues(new Uint8Array(32)))
+  const salt = toBase64(webCrypto().getRandomValues(new Uint8Array(16)))
+  return { protection: await accountGroupKey(salt, encoded), encoded }
 }
 
 export function inviteCode(value: string) {

@@ -71,6 +71,15 @@ service cloud.firestore {
       return head.get('summary', {}).get('ownerMemberId', '');
     }
 
+    function accountKeyPath(id) {
+      return /databases/$(database)/documents/cloudGroups/$(id)/access/account;
+    }
+
+    function validAccountKey(data) {
+      return data.keys().hasOnly(['key']) && data.key is string
+        && data.key.matches('^[A-Za-z0-9+/]{43}=$');
+    }
+
     function statsPath(id) {
       return /databases/$(database)/documents/cloudGroups/$(id)/stats/current;
     }
@@ -103,7 +112,7 @@ service cloud.firestore {
     function validContent(data) {
       return data.keys().hasAll(['owner', 'revision', 'partCount', 'summary', 'createdAt'])
         && data.keys().hasOnly(['owner', 'revision', 'partCount', 'summary', 'createdAt', 'archivedAt', 'archivedBy', 'restoredAt', 'storage', 'receiptVersion'])
-        && (!('storage' in data) || data.storage == 'account')
+        && (!('storage' in data) || data.storage in ['account', 'key'])
         && (!('receiptVersion' in data) || (data.receiptVersion is int && data.receiptVersion == 1))
         && (!('description' in data.summary) || data.get('storage', '') == 'account')
         && data.owner is string && data.revision is string && data.revision.size() == 36
@@ -145,7 +154,9 @@ service cloud.firestore {
       return activeOwner(previous) && active(next) && validContent(next)
         && !next.keys().hasAny(['archivedAt', 'archivedBy'])
         && next.owner == previous.owner && next.revision != previous.revision
-        && next.get('storage', '') == previous.get('storage', '')
+        && (next.get('storage', '') == previous.get('storage', '')
+          || (!('storage' in previous) && next.get('storage', '') == 'key'
+            && !exists(accountKeyPath(id)) && existsAfter(accountKeyPath(id))))
         && (previous.get('receiptVersion', 0) == 0 || next.get('receiptVersion', 0) == 1)
         && next.get('createdAt', null) == previous.get('createdAt', null)
         && next.get('restoredAt', null) == previous.get('restoredAt', null)
@@ -322,10 +333,21 @@ service cloud.firestore {
       allow create: if verified() && groupId(id) && validContent(request.resource.data)
         && request.resource.data.owner == request.auth.uid && request.resource.data.createdAt == request.time
         && !('restoredAt' in request.resource.data)
+        && (request.resource.data.get('storage', '') != 'key'
+          || (active(request.resource.data) && existsAfter(accountKeyPath(id))))
         && getAfter(statsPath(id)).data.revision == request.resource.data.revision
         && ((active(request.resource.data) && !request.resource.data.keys().hasAny(['archivedAt', 'archivedBy'])
             && existsAfter(ownedPath(request.auth.uid, id))) || validArchive(id, request.resource.data));
       allow update: if groupId(id) && (canSave(id) || canArchive(id) || canRestore(id));
+
+      match /access/account {
+        allow get: if get(groupPath(id)).data.get('storage', '') == 'key'
+          && (participant(id, get(groupPath(id)).data) || (!active(get(groupPath(id)).data) && admin()));
+        allow create: if groupId(id) && verified() && validAccountKey(request.resource.data)
+          && getAfter(groupPath(id)).data.storage == 'key' && activeOwner(getAfter(groupPath(id)).data)
+          && (!exists(groupPath(id)) || (activeOwner(get(groupPath(id)).data)
+            && !('storage' in get(groupPath(id)).data)));
+      }
 
       match /linkedEmails/{key} {
         allow get: if activeOwner(get(groupPath(id)).data);
@@ -417,7 +439,7 @@ service cloud.firestore {
           && !exists(assignedMember(id, request.resource.data.memberId))
           && (existsAfter(inviteLink(id, request.resource.data.memberId))
             ? getAfter(inviteLink(id, request.resource.data.memberId)).data.token == token
-            : get(groupPath(id)).data.get('storage', '') != 'account');
+            : !('storage' in get(groupPath(id)).data));
         allow update: if verified() && active(get(groupPath(id)).data) && resource.data.get('claimedBy', null) == null
           && currentInvite(id, resource.data.memberId, token)
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['claimedBy'])

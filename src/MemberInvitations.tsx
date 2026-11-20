@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Mail, Search, UserRoundPlus } from 'lucide-react'
+import { Mail } from 'lucide-react'
 import { accountError, listLinkedMembers, type Account } from './firebase'
 import type { Group, Member } from './model'
 import { findAccounts, groupInvites, inviteEmail, inviteStatus, memberInviteUrl, ownDiscovery, revokeMemberInvite,
@@ -52,6 +52,10 @@ export function AddMembers({ group, members, saveName, sendInvite }: {
     setMemberId('')
     setError('')
     setSearching(false)
+    setMatches([])
+    setSearched(false)
+    if (next === 'name' && !validEmail(inviteEmail(term))) setName(term.trim())
+    if (next === 'email' && !profile && !validEmail(inviteEmail(term))) setTerm('')
     setMode(next)
   }
 
@@ -70,19 +74,26 @@ export function AddMembers({ group, members, saveName, sendInvite }: {
   if (saved) return <div className="form-stack">
     <p role="status">Invitation created for {saved.email}.</p>
     <ManualDelivery groupId={group.id} invite={saved} />
+    <button className="text-button" onClick={() => { setSaved(undefined); setTerm(""); select("search") }}>Invite someone else</button>
   </div>
 
   return <form className="form-stack" onSubmit={event => { event.preventDefault(); if (mode !== 'search') void confirm() }}>
-    <label className="field"><span>{mode === 'email' ? 'Email' : 'Search by name or exact email'}</span>
+    <div className="workspace-segmented" role="group" aria-label="Add members by">
+      <button type="button" disabled={pending} aria-pressed={mode === "search" || Boolean(chosen)} onClick={() => select("search")}>Tally users</button>
+      <button type="button" disabled={pending} aria-pressed={mode === "email" && !chosen} onClick={() => select("email")}>Invite by email</button>
+      <button type="button" disabled={pending} aria-pressed={mode === "name"} onClick={() => select("name")}>Add by name</button>
+    </div>
+    {mode !== "name" && <label className="field"><span>{mode === "email" ? "Email" : "Search by name or exact email"}</span>
       <input type={mode === 'email' ? 'email' : 'search'} placeholder={mode === 'email' ? undefined : 'Name or email'}
         autoComplete="off" required={mode === 'email'} disabled={pending} value={chosen?.email ?? term}
         onChange={event => {
+          if (chosen) { setName(''); setMemberId('') }
           setChosen(undefined); setTerm(event.target.value); setSearched(false); setMatches([]); setSearching(false); setError('')
         }} />
-    </label>
+    </label>}
     {mode === 'search' && <>
       {searching && <p className="muted" role="status">Searching discoverable accounts&hellip;</p>}
-      {searched && !searching && !matches.length && <p className="muted" role="status">No discoverable accounts found.</p>}
+      {searched && !searching && !matches.length && <p className="muted" role="status">No matching Tally profiles. You can still invite them by email.</p>}
       {matches.length > 0 && <ul className="list-surface discovery-list" aria-label="Matching Tally accounts">
         {matches.map(profile => <li key={profile.uid}><button type="button" onClick={() => select('email', profile)}>
           <span className="avatar tone-neutral" aria-hidden="true">{profile.photo
@@ -90,13 +101,9 @@ export function AddMembers({ group, members, saveName, sendInvite }: {
           <span><strong>{profile.name}</strong><small>{profile.email}</small></span>
         </button></li>)}
       </ul>}
-      <div className="inline-actions">
-        <button type="button" className="button" onClick={() => select('email')}><Mail size={16} />Invite by email</button>
-        <button type="button" className="button" onClick={() => { select('name'); if (!validEmail(term)) setName(term.trim()) }}><UserRoundPlus size={16} />Add by name</button>
-      </div>
     </>}
     {mode === 'email' && <>
-      {chosen && <p className="muted">Inviting {chosen.name} to join with their Tally account.</p>}
+      <p className="muted">{chosen ? 'Inviting ' + chosen.name + ' to join with their Tally account.' : 'Invite anyone with an email address. They can create a Tally account when they open the link.'}</p>
       {candidates.length > 0 && <label className="field"><span>Link to an existing roster member</span>
         <select value={memberId} disabled={pending} onChange={event => setMemberId(event.target.value)}>
           <option value="">Add a new roster member</option>
@@ -113,7 +120,6 @@ export function AddMembers({ group, members, saveName, sendInvite }: {
       <button type="submit" className="button primary" disabled={pending || (mode === 'name' ? !name.trim() : !validEmail(email))}>
         {pending ? 'Saving\u2026' : mode === 'name' ? 'Add member' : 'Create invitation'}
       </button>
-      <button type="button" className="text-button" disabled={pending} onClick={() => select('search')}><Search size={15} />Back to search</button>
     </div>}
   </form>
 }

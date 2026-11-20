@@ -23,7 +23,7 @@ import { maxPasswordLength } from './vault'
 
 type MemberPage = { kind: 'members' } | { kind: 'member'; member?: Member; self?: boolean }
 type Panel =
-  | { kind: 'theme' | 'account' | 'switch-group' | 'invite' | 'manage' | 'import' | 'guest-share' | 'add-members' | 'member-invites' | 'inbox' | 'discovery' }
+  | { kind: 'theme' | 'account' | 'switch-group' | 'invite' | 'manage' | 'import' | 'guest-share' | 'add-members' | 'invite-members' | 'member-invites' | 'inbox' | 'discovery' }
   | { kind: 'share'; regenerate?: boolean }
   | { kind: 'remove-member'; member: Member }
   | { kind: 'group'; group?: Group; newId?: string }
@@ -45,7 +45,7 @@ function upsert<T extends { id: string }>(records: T[], record: T) {
   else records[index] = record
 }
 
-function EncryptedGroupForm({ busy, unlock }: { busy: boolean; unlock: (password: string) => void }) {
+function LegacyAccessForm({ busy, archived, unlock }: { busy: boolean; archived: boolean; unlock: (password: string) => void }) {
   const password = useRef<HTMLInputElement>(null)
   return <form className="form-stack" onSubmit={event => {
     event.preventDefault()
@@ -53,10 +53,10 @@ function EncryptedGroupForm({ busy, unlock }: { busy: boolean; unlock: (password
     if (password.current) password.current.value = ''
     unlock(value)
   }}>
-    <label className="field"><span>Group password</span>
+    <label className="field"><span>{archived ? "Group password" : "Current group password"}</span>
       <input ref={password} type="password" autoComplete="off" required maxLength={maxPasswordLength} disabled={busy} />
     </label>
-    <button className="button primary" disabled={busy}>{busy ? 'Opening\u2026' : 'Open encrypted group'}</button>
+    <button className="button primary" disabled={busy}>{busy ? 'Please wait\u2026' : archived ? 'Open encrypted group' : 'Enable account access'}</button>
   </form>
 }
 
@@ -70,8 +70,8 @@ function InviteForm({ openInvite }: { openInvite: (code: string) => void }) {
   </form>
 }
 
-function GroupAccess({ route, admin, adminReady, busy, open, unlock, join }: {
-  route: Extract<Route, { page: 'group' }>; admin: boolean; adminReady: boolean; busy: boolean;
+function GroupAccess({ route, accountId, admin, adminReady, busy, open, unlock, join }: {
+  route: Extract<Route, { page: 'group' }>; accountId: string; admin: boolean; adminReady: boolean; busy: boolean;
   open: (group: AccountLedger) => void; unlock: (password: string) => void; join: () => void;
 }) {
   const [head, setHead] = useState<GroupHead>()
@@ -118,9 +118,15 @@ function GroupAccess({ route, admin, adminReady, busy, open, unlock, join }: {
     {head.archivedAt ? 'Open this archived group from Platform Admin.' : 'This group has been restored. Open it from My Groups if you are a member.'}
   </p>
   return <section className="auth-card">
-    <h1>{head.summary?.name ?? head.legacyName ?? 'Open encrypted group'}</h1>
-    <p>Enter the group password to open this encrypted ledger.</p>
-    <EncryptedGroupForm busy={busy} unlock={unlock} />
+    <h1>{head.summary?.name ?? head.legacyName ?? 'Open legacy group'}</h1>
+    {archived || head.owner === accountId ? <>
+      <p>{archived ? 'Enter the original password to open this legacy archive.'
+        : 'Enter the current group password once. After that, the owner and members can open the encrypted ledger by signing in to Tally.'}</p>
+      <LegacyAccessForm busy={busy} archived={archived} unlock={unlock} />
+    </> : <>
+      <p>Ask the group owner to enable account access. You can then open the group with your Tally account.</p>
+      <button className="button" onClick={() => setAttempt(current => current + 1)}>Check again</button>
+    </>}
   </section>
 }
 
@@ -478,7 +484,8 @@ function SignedInApp({ account, theme, changeTheme, viewGuest }: {
     if (panel.kind === 'member-invites' && group && canEdit) return <Sheet title="Member invitations" close={close}>
       <MemberInvitationList groupId={group.id} />
     </Sheet>
-    if (panel.kind === 'add-members' && group && canEdit) return <Sheet title="Add members" close={close} busy={busy}>
+    if ((panel.kind === "add-members" || panel.kind === "invite-members") && group && canEdit) return <Sheet
+      title={panel.kind === "invite-members" ? "Invite members" : "Add members"} close={close} busy={busy}>
       <AddMembers group={group} members={members} saveName={async name => {
         await saveMember({ id: crypto.randomUUID(), groupId: group.id, active: true, name })
         changed({ kind: 'members' })
@@ -493,6 +500,7 @@ function SignedInApp({ account, theme, changeTheme, viewGuest }: {
         }, undefined, draft)
         return readIssuedInvite(group.id, choice.email)
       }} />
+      {panel.kind === "invite-members" && <button className="text-button" onClick={() => open({ kind: "guest-share" })}><Eye size={16} />Share a view-only link</button>}
     </Sheet>
     if (panel.kind === 'share' && group && canEdit) return <Sheet key="share" title={panel.regenerate ? 'Regenerate invite link' : 'Copy invite link'}
       close={close} description={panel.regenerate ? 'A new one-time link replaces any unused link for the selected member.'
@@ -631,10 +639,11 @@ function SignedInApp({ account, theme, changeTheme, viewGuest }: {
         : route.page === 'groups' ? <MyGroups accountId={account.id} version={version}
           offline={!online} create={() => open({ kind: "group", newId: cloudGroupId() })}
           join={() => open({ kind: "invite" })} open={openGroup} />
-        : !group && <GroupAccess key={`${route.id}:${route.archived}:${route.token}`} route={route} admin={admin} adminReady={adminReady} busy={busy}
+        : !group && <GroupAccess key={`${route.id}:${route.archived}:${route.token}`} route={route} accountId={account.id} admin={admin} adminReady={adminReady} busy={busy}
           open={ledger.openAccountGroup}
           unlock={password => perform(async () => {
             await ledger.unlockGroup(await firebaseGroupId(route.id), password, route.archived)
+            if (!route.archived) setMessage('Account access enabled.')
             setVersion(current => current + 1)
             window.requestAnimationFrame(() => document.getElementById('group-title')?.focus())
           })}
@@ -665,7 +674,7 @@ function SignedInApp({ account, theme, changeTheme, viewGuest }: {
             </div>
           </div>
           {canStartEdit && <div className="workspace-group-actions">
-            <button className="button share-action" aria-label="Share" title="Share" onClick={() => open({ kind: "share" })}><Link2 size={17} /><span>Share</span></button>
+            <button className="button share-action" aria-label="Share" title="Share" onClick={() => open({ kind: "invite-members" })}><Link2 size={17} /><span>Share</span></button>
             <button className="icon-button" aria-label="Manage group" title="Manage group" onClick={() => open({ kind: "manage" })}><Ellipsis size={20} /></button>
             <div className="add-expense-dock"><button className="button primary add-expense" onClick={() => startExpense()}><Plus size={20} />Add expense</button></div>
           </div>}

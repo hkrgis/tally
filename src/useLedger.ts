@@ -3,10 +3,7 @@ import { accountError, codeOf, readCloudGroup, readGroupHead, saveCloudGroup, wa
 import type { InviteDraft } from './memberInvites'
 import { parseData, type Activity, type AppData, type Group, type Member } from './model'
 import { firebaseGroupId } from './routing'
-import { decryptGroup, openGroup, parseDirectory, sealGroup } from './vault'
-
-type Protection = Pick<Awaited<ReturnType<typeof openGroup>>, 'key' | 'salt'>
-type OpenedLedger = AccountLedger & { protection?: Protection }
+import { createAccountGroupKey, decryptGroup, openGroup, parseDirectory, sealGroup, type GroupKey } from './vault'
 
 type EventInput = Omit<Activity, 'id' | 'at' | 'actor'>
 
@@ -14,7 +11,7 @@ export const errorText = (error: unknown) => error instanceof Error ? error.mess
 
 export function useLedger(account: Account) {
   const workingLock = useRef(false)
-  const [opened, setOpened] = useState<OpenedLedger | null>(null)
+  const [opened, setOpened] = useState<AccountLedger | null>(null)
   const [working, setWorking] = useState(false)
   const [accessError, setAccessError] = useState('')
   const cloudOwner = account.verified && opened?.owner === account.id && !opened.archivedAt
@@ -37,7 +34,7 @@ export function useLedger(account: Account) {
             lost()
             return
           }
-          const protection = 'entry' in cloud ? opened.protection : undefined
+          const protection = 'entry' in cloud ? opened.protection : cloud.protection
           if ('entry' in cloud && (!protection || protection.salt !== cloud.entry.salt)) { lost(); return }
           const data = 'data' in cloud ? cloud.data : await decryptGroup(cloud.entry, protection!.key)
           data.groups[0].archived = Boolean(cloud.archivedAt)
@@ -51,7 +48,7 @@ export function useLedger(account: Account) {
     return () => { mounted = false; unsubscribe?.() }
   }, [opened])
 
-  const openAccountGroup = useCallback((group: OpenedLedger) => {
+  const openAccountGroup = useCallback((group: AccountLedger) => {
     setAccessError('')
     setOpened(group)
   }, [])
@@ -77,6 +74,7 @@ export function useLedger(account: Account) {
         openAccountGroup(cloud)
         return
       }
+      if (!allowArchived && cloud.owner !== account.id) throw new Error('Ask the owner to enable account access for this group.')
       const { data, key, salt } = await openGroup(cloud.entry, password)
       const latest = await readGroupHead(id)
       if (latest.revision !== cloud.revision || latest.archivedAt !== cloud.archivedAt) {
@@ -86,16 +84,21 @@ export function useLedger(account: Account) {
         throw new Error('This legacy group was archived. Ask the platform admin to register its archived status before opening it.')
       }
       data.groups[0].archived = Boolean(cloud.archivedAt)
-      openAccountGroup({ ...cloud, data, protection: { key, salt } })
+      if (allowArchived) {
+        openAccountGroup({ ...cloud, data, protection: { key, salt } })
+        return
+      }
+      const { protection, encoded } = await createAccountGroupKey()
+      await storeCloud(data, undefined, cloud.revision, undefined, protection, undefined, encoded)
     })
   }
 
-  async function storeCloud(draft: AppData, info?: EventInput, expectedRevision?: string, removedMemberId?: string, protection?: Protection, invite?: InviteDraft) {
+  async function storeCloud(draft: AppData, info?: EventInput, expectedRevision?: string, removedMemberId?: string, protection?: GroupKey, invite?: InviteDraft, newAccountKey?: string) {
     if (info) draft.activity.push({ ...info, id: crypto.randomUUID(), at: new Date().toISOString(), actor: 'Group owner' })
     const data = parseData(draft)
     try {
       const encrypted = protection ? await sealGroup(data, protection) : undefined
-      const cloud = await saveCloudGroup(account, data, expectedRevision, removedMemberId, encrypted, invite)
+      const cloud = await saveCloudGroup(account, data, expectedRevision, removedMemberId, encrypted, invite, newAccountKey)
       if (!data.groups[0].archived) openAccountGroup({ ...cloud, protection })
     } catch (issue) {
       throw new Error(accountError(issue))
@@ -131,7 +134,11 @@ export function useLedger(account: Account) {
       for (const event of data.activity) {
         if (event.entity === 'group' && event.entityId === entry.id) event.entityId = id
       }
-      await storeCloud(data, undefined, undefined, undefined, { key, salt })
+      if (group.archived) await storeCloud(data, undefined, undefined, undefined, { key, salt })
+      else {
+        const { protection, encoded } = await createAccountGroupKey()
+        await storeCloud(data, undefined, undefined, undefined, protection, undefined, encoded)
+      }
     })
   }
 
