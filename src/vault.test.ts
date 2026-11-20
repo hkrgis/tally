@@ -65,6 +65,17 @@ describe('encrypted group records', () => {
     expect(inviteCode('https://example.com/tally/?group=%2Fother')).toBe('')
   })
 
+  it("preserves optional receipt photos and older payments inside an encrypted snapshot", async () => {
+    const { id: groupId } = data.groups[0]
+    const second = { id: "b", name: "Another member", active: true, groupId }
+    const payment = { id: "legacy-payment", groupId, from: second.id, to: "a", amount: 100, date: "2026-11-19", notes: "" }
+    const receipt = { id: "another-photo", name: "payment.jpg", source: "data:image/jpeg;base64,/9j/2Q==" }
+    const ledger = { ...data, members: [...data.members, second], payments: [payment, { ...payment, id: "receipt-payment", receipt }] }
+    const entry = await sealGroup(ledger, await createGroupKey(password))
+    expect(JSON.stringify(entry)).not.toContain(receipt.name)
+    expect((await openGroup(entry, password)).data).toEqual(ledger)
+  })
+
   it('protects the new version with a new password after rotation', async () => {
     const newPassword = 'changed test password'
     const entry = await sealGroup(data, await createGroupKey(newPassword))

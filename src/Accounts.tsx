@@ -1,5 +1,5 @@
-﻿import { useEffect, useState, type FormEvent } from 'react'
-import { LogOut, Mail, UserRound } from 'lucide-react'
+import { useEffect, useState, type FormEvent } from 'react'
+import { Eye, LogOut, Mail, UserRound } from 'lucide-react'
 import googleSignInDark from './assets/google-signin-dark.png'
 import googleSignInLight from './assets/google-signin-light.png'
 import {
@@ -38,8 +38,8 @@ export function useAccount() {
 
 type Mode = 'signin' | 'register' | 'reset'
 
-export function AuthCard({ busy, error, run, clearError }: {
-  busy: boolean; error: string; run: (work: () => Promise<void>) => void; clearError: () => void;
+export function AuthCard({ busy, error, run, clearError, viewGuest }: {
+  busy: boolean; error: string; run: (work: () => Promise<void>) => void; clearError: () => void; viewGuest: () => void;
 }) {
   const [mode, setMode] = useState<Mode>('signin')
   const [email, setEmail] = useState('')
@@ -105,6 +105,11 @@ export function AuthCard({ busy, error, run, clearError }: {
     </button>}
     {reset && <button className="text-button" disabled={busy} onClick={() => choose('signin')}>Back to log in</button>}
     {!reset && !register && <button className="text-button" disabled={busy} onClick={() => choose('reset')}>Forgot password?</button>}
+    {!reset && <><div className="auth-divider">or</div>
+      <button className="button guest-auth" type="button" disabled={busy} onClick={viewGuest}>
+        <Eye size={16} aria-hidden="true" />View as guest
+      </button>
+    </>}
   </section>
 }
 

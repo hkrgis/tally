@@ -1,50 +1,60 @@
-import { useEffect, useRef, useState } from 'react'
-import { accountError, changeGroupArchive, isCloudGroup, readCloudGroup, readGroupHead, saveCloudGroup, summariseGroup, watchGroupHead, type Account, type CloudGroup } from './firebase'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { accountError, codeOf, readCloudGroup, readGroupHead, saveCloudGroup, watchGroupHead, type Account, type AccountLedger } from './firebase'
+import type { InviteDraft } from './memberInvites'
 import { parseData, type Activity, type AppData, type Group, type Member } from './model'
-import { createGroupKey, decryptGroup, openGroup, parseDirectory, sealGroup } from './vault'
+import { firebaseGroupId } from './routing'
+import { decryptGroup, openGroup, parseDirectory, sealGroup } from './vault'
+
+type Protection = Pick<Awaited<ReturnType<typeof openGroup>>, 'key' | 'salt'>
+type OpenedLedger = AccountLedger & { protection?: Protection }
 
 type EventInput = Omit<Activity, 'id' | 'at' | 'actor'>
-type Opened = Awaited<ReturnType<typeof openGroup>> & { cloud: CloudGroup }
 
 export const errorText = (error: unknown) => error instanceof Error ? error.message : 'Something went wrong. Try again.'
 
 export function useLedger(account: Account) {
   const workingLock = useRef(false)
-  const [opened, setOpened] = useState<Opened | null>(null)
+  const [opened, setOpened] = useState<OpenedLedger | null>(null)
   const [working, setWorking] = useState(false)
   const [accessError, setAccessError] = useState('')
-  const cloudOwner = account.verified && opened?.cloud.owner === account.id && !opened.cloud.archivedAt
+  const cloudOwner = account.verified && opened?.owner === account.id && !opened.archivedAt
 
   useEffect(() => {
     if (!opened) return
     let mounted = true
     let unsubscribe: (() => void) | undefined
-    const closeIfCurrent = (message: string) => {
+    const lost = () => {
       if (!mounted) return
       setOpened(current => current === opened ? null : current)
-      setAccessError(message)
+      setAccessError('This group is no longer available to your account.')
     }
-    const lost = () => closeIfCurrent('This group is no longer available to your account.')
-    void watchGroupHead(opened.cloud.id, head => {
-      if (head.archivedAt !== opened.cloud.archivedAt) {
+    void watchGroupHead(opened.id, head => {
+      if (head.archivedAt !== opened.archivedAt) {
         lost()
-      } else if (head.revision !== opened.cloud.revision) {
+      } else if (head.revision !== opened.revision) {
         void readCloudGroup(head.id).then(async cloud => {
-          if (cloud.archivedAt !== opened.cloud.archivedAt || cloud.entry.salt !== opened.salt) {
+          if (cloud.archivedAt !== opened.archivedAt) {
             lost()
             return
           }
-          const data = await decryptGroup(cloud.entry, opened.key)
+          const protection = 'entry' in cloud ? opened.protection : undefined
+          if ('entry' in cloud && (!protection || protection.salt !== cloud.entry.salt)) { lost(); return }
+          const data = 'data' in cloud ? cloud.data : await decryptGroup(cloud.entry, protection!.key)
           data.groups[0].archived = Boolean(cloud.archivedAt)
-          if (mounted) setOpened(current => current === opened ? { ...opened, entry: cloud.entry, data, cloud } : current)
-        }).catch(lost)
+          if (mounted) setOpened(current => current === opened ? { ...cloud, data, protection } : current)
+        }).catch(issue => { if (codeOf(issue) !== 'unavailable') lost() })
       }
     }, lost).then(stop => {
       if (mounted) unsubscribe = stop
       else stop()
-    }).catch(lost)
+    }).catch(issue => { if (codeOf(issue) !== 'unavailable') lost() })
     return () => { mounted = false; unsubscribe?.() }
   }, [opened])
+
+  const openAccountGroup = useCallback((group: OpenedLedger) => {
+    setAccessError('')
+    setOpened(group)
+  }, [])
 
   function lock() {
     setOpened(null)
@@ -52,48 +62,47 @@ export function useLedger(account: Account) {
   }
 
   async function exclusive(work: () => Promise<void>) {
+    if (!navigator.onLine) throw new Error('Reconnect to continue. Your changes have not been saved.')
     if (workingLock.current) throw new Error('Wait for the current operation to finish.')
     workingLock.current = true
     setWorking(true)
     try { await work() } finally { workingLock.current = false; setWorking(false) }
   }
 
-  async function unlock(id: string, password: string, allowArchived: boolean) {
+  async function unlockGroup(id: string, password: string, allowArchived: boolean) {
     await exclusive(async () => {
-      let cloud = await readCloudGroup(id)
-      if (cloud.archivedAt && !allowArchived) throw new Error('This group is archived. Open it from Platform Admin.')
-      const record = await openGroup(cloud.entry, password)
+      const cloud = await readCloudGroup(id)
+      if (Boolean(cloud.archivedAt) !== allowArchived) throw new Error('The group status changed. Open it again from its current listing.')
+      if ('data' in cloud) {
+        openAccountGroup(cloud)
+        return
+      }
+      const { data, key, salt } = await openGroup(cloud.entry, password)
       const latest = await readGroupHead(id)
       if (latest.revision !== cloud.revision || latest.archivedAt !== cloud.archivedAt) {
-        throw new Error('The group changed while unlocking. Try again.')
+        throw new Error('The group changed while opening. Try again.')
       }
-      if (record.data.groups[0].archived && !cloud.archivedAt && !cloud.summary && !cloud.restoredAt) {
-        await changeGroupArchive(id, true, summariseGroup(record.data))
-        throw new Error('This legacy group was archived. The platform admin can access or restore it.')
+      if (data.groups[0].archived && !cloud.archivedAt && !cloud.restoredAt) {
+        throw new Error('This legacy group was archived. Ask the platform admin to register its archived status before opening it.')
       }
-      record.data.groups[0].archived = Boolean(cloud.archivedAt)
-      if (!cloud.summary && cloud.owner === account.id && !cloud.archivedAt) {
-        cloud = await saveCloudGroup(account, record.data, cloud.entry, cloud.revision)
-      }
-      setAccessError('')
-      setOpened({ ...record, cloud })
+      data.groups[0].archived = Boolean(cloud.archivedAt)
+      openAccountGroup({ ...cloud, data, protection: { key, salt } })
     })
   }
 
-  async function storeCloud(draft: AppData, protection: Pick<Opened, 'key' | 'salt'>,
-    info?: EventInput, expectedRevision?: string) {
+  async function storeCloud(draft: AppData, info?: EventInput, expectedRevision?: string, removedMemberId?: string, protection?: Protection, invite?: InviteDraft) {
     if (info) draft.activity.push({ ...info, id: crypto.randomUUID(), at: new Date().toISOString(), actor: 'Group owner' })
     const data = parseData(draft)
-    const entry = await sealGroup(data, protection)
     try {
-      const cloud = await saveCloudGroup(account, data, entry, expectedRevision)
-      if (!data.groups[0].archived) setOpened({ ...protection, data, entry, cloud })
+      const encrypted = protection ? await sealGroup(data, protection) : undefined
+      const cloud = await saveCloudGroup(account, data, expectedRevision, removedMemberId, encrypted, invite)
+      if (!data.groups[0].archived) openAccountGroup({ ...cloud, protection })
     } catch (issue) {
       throw new Error(accountError(issue))
     }
   }
 
-  async function createGroup(group: Group, password: string, ownerName?: string) {
+  async function createGroup(group: Group, ownerName?: string) {
     await exclusive(async () => {
       const owner: Member | undefined = ownerName
         ? { id: crypto.randomUUID(), groupId: group.id, name: ownerName, active: true } : undefined
@@ -101,9 +110,8 @@ export function useLedger(account: Account) {
         version: 1, groups: [owner ? { ...group, ownerMemberId: owner.id } : group], members: owner ? [owner] : [],
         expenses: [], payments: [], sessions: [], activity: [],
       }
-      const protection = await createGroupKey(password)
       const info: EventInput = { entity: 'group', groupId: group.id, entityId: group.id, title: group.name, action: 'created' }
-      await storeCloud(data, protection, info)
+      await storeCloud(data, info)
     })
   }
 
@@ -114,13 +122,7 @@ export function useLedger(account: Account) {
       const entry = entries.find(group => group.id === source) ?? (!source && entries.length === 1 ? entries[0] : undefined)
       if (!entry) throw new Error('Enter the group code for a group in this file.')
       const { data, key, salt } = await openGroup(entry, password)
-      let id = isCloudGroup(entry.id) ? entry.id : `f-${entry.id.toLowerCase()}`
-      if (!isCloudGroup(id)) {
-        const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(entry.id))
-        const hex = Array.from(new Uint8Array(digest, 0, 16), octet => octet.toString(16).padStart(2, '0')).join('')
-        const segments = [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20)]
-        id = `f-${segments.join('-')}`
-      }
+      const id = await firebaseGroupId(entry.id)
       const group = data.groups[0]
       group.id = id
       for (const table of [data.members, data.expenses, data.payments, data.sessions, data.activity]) {
@@ -129,22 +131,21 @@ export function useLedger(account: Account) {
       for (const event of data.activity) {
         if (event.entity === 'group' && event.entityId === entry.id) event.entityId = id
       }
-      await storeCloud(data, { key, salt })
+      await storeCloud(data, undefined, undefined, undefined, { key, salt })
     })
   }
 
-  async function change(update: (draft: AppData) => void, info: EventInput, password?: string) {
-    if (!opened || !cloudOwner || info.groupId !== opened.cloud.id) {
+  async function change(update: (draft: AppData) => void, info: EventInput, removedMemberId?: string, invite?: InviteDraft) {
+    if (!opened || !cloudOwner || info.groupId !== opened.id) {
       throw new Error('Open an active group you own before changing records.')
     }
     await exclusive(async () => {
       const draft = structuredClone(opened.data)
       update(draft)
-      const protection = password ? await createGroupKey(password) : { key: opened.key, salt: opened.salt }
-      await storeCloud(draft, protection, info, opened.cloud.revision)
+      await storeCloud(draft, info, opened.revision, removedMemberId, opened.protection, invite)
     })
   }
 
-  return { data: opened?.data ?? null, cloud: opened?.cloud, cloudOwner, accessError, working,
-    lock, unlock, change, createGroup, importGroup }
+  return { data: opened?.data ?? null, cloud: opened, cloudOwner, accessError, working,
+    lock, openAccountGroup, unlockGroup, change, createGroup, importGroup }
 }

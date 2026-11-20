@@ -62,7 +62,7 @@ const expenseSchema = z.object({
 })
 const paymentSchema = z.object({
   id, groupId: id, from: id, to: id, amount: positive, date: day, notes,
-  paymentMethod: z.optional(paymentMethod),
+  paymentMethod: z.optional(paymentMethod), receipt: z.optional(photoSchema),
 })
 // Older encrypted ledgers retain their schedule metadata when expenses are edited.
 const sessionSchema = z.object({
